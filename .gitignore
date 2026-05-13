@@ -1,0 +1,14 @@
+.DS_Store
+node_modules/
+npm-debug.log*
+
+# Local agent runtime state
+.omx/
+logs/
+.claude/settings.local.json
+
+# Local project memory belongs to the current workspace. Published installs use
+# the clean templates under templates/claude/memory/.
+.claude/memory/
+.claude/knowledge-graph.md
+.claude/session-state.md

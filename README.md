@@ -1,0 +1,520 @@
+# tt-b
+
+`tt-b` is a model-aware agent workflow kit for memory-backed engineering tasks.
+
+It defines an importable startup contract that can work with Claude Code CLI,
+Codex, OpenCode, and any other coding agent that can consume instruction files,
+hooks, MCP tools, or REST APIs.
+
+After installation, an agent can:
+
+- detect the active host and model
+- recover project memory before editing
+- choose an execution mode from model capability
+- keep long-term knowledge separate from transient session state
+- install the workflow into another local project with one command
+
+Current templates are provided for Claude Code, Codex-style `AGENTS.md`, and
+OpenCode. Other agents can integrate through the same contract by reading the
+generated instruction files, calling the helper scripts from hooks, exposing
+them through MCP, or wrapping them behind a REST API.
+
+## One-command import
+
+From this repository:
+
+```bash
+node bin/import-agent-workflow.js /path/to/target-project
+```
+
+This installs the workflow into the target project for Claude Code,
+Codex-style agents, OpenCode, and adapter-based agents.
+
+It creates or updates:
+
+- `CLAUDE.md` - Claude Code / shared agent startup contract
+- `AGENTS.md` - OpenCode-compatible agent instructions
+- `opencode.json` - OpenCode instruction file registration
+- `.claude/bin/model-preflight.js` - host/model/capability detector
+- `.claude/bin/memory-reminder.js` - non-blocking memory reminder hook helper
+- `.claude/bin/tt-b-mcp-server.js` - MCP server exposing memory resources and tools
+- `.claude/bin/tt-b-rest-server.js` - REST API server for HTTP-based integration
+- `.claude/bin/tt-b-lifecycle.js` - Full lifecycle bootstrap with 9 phases (config, provider, worker, memory functions, REST, MCP, viewer, health, search index)
+- `.claude/settings.json` - Claude Code hook registration for memory reminders
+- `.claude/memory/knowledge-graph.md` - clean long-term memory template
+- `.claude/memory/session-state.md` - clean current-task state template
+- `.claude/knowledge-graph.md` - legacy compatibility pointer
+- `.claude/session-state.md` - legacy compatibility pointer
+
+Existing `CLAUDE.md` and `AGENTS.md` content is preserved. The importer appends
+or replaces only the managed `tt-b` block. Existing memory files are preserved
+unless `--force` is used.
+
+Useful options:
+
+```bash
+node bin/import-agent-workflow.js /path/to/target-project --dry-run
+node bin/import-agent-workflow.js /path/to/target-project --force
+```
+
+## One-command cleanup
+
+Remove all tt-b artifacts from a target project:
+
+```bash
+node bin/tt-b-cleanup.js /path/to/target-project
+```
+
+This removes:
+
+- Managed blocks from `CLAUDE.md` and `AGENTS.md` (preserves existing content)
+- Helper scripts in `.claude/bin/`
+- Memory templates in `.claude/memory/`
+- Legacy pointer files in `.claude/`
+- Hook entries from `.claude/settings.json` (preserves other settings)
+- Instruction entries from `opencode.json` (preserves other config)
+- Empty directories left behind
+
+Useful options:
+
+```bash
+node bin/tt-b-cleanup.js /path/to/target-project --dry-run
+node bin/tt-b-cleanup.js /path/to/target-project --force
+```
+
+Without `--force`, memory files containing real project data and non-pointer
+legacy files are kept. With `--force`, everything tt-b related is removed.
+
+## Install from GitHub
+
+After publishing this repository to GitHub, users can import the workflow with
+one command:
+
+```bash
+npx --yes github:YOUR_GITHUB_USERNAME/tt-b /path/to/target-project
+```
+
+From inside the target project, the shortest form is:
+
+```bash
+npx --yes github:YOUR_GITHUB_USERNAME/tt-b .
+```
+
+Replace `YOUR_GITHUB_USERNAME` with the GitHub account or organization that owns
+the repository. This works because `package.json` exposes the importer as the
+single `tt-b` executable.
+
+To publish:
+
+```bash
+git init
+git add .
+cat > /tmp/tt-b-commit-message.txt <<'EOF'
+Enable GitHub-based workflow installs
+
+Constraint: Users should be able to run the importer through npx from GitHub without cloning first.
+Confidence: high
+Scope-risk: narrow
+Tested: npm run verify; npm pack --dry-run
+Not-tested: GitHub Actions before the first push
+EOF
+git commit -F /tmp/tt-b-commit-message.txt
+git branch -M main
+git remote add origin git@github.com:YOUR_GITHUB_USERNAME/tt-b.git
+git push -u origin main
+```
+
+Before pushing, run:
+
+```bash
+npm run verify
+npm pack --dry-run
+```
+
+On GitHub, you can also mark the repository as a template repository in
+`Settings -> General -> Template repository` so users see a **Use this template**
+button.
+
+## Architecture
+
+```
+tt-b/
+├── bin/                          # CLI entry points (thin wrappers)
+│   ├── import-agent-workflow.js  # one-command importer
+│   ├── tt-b-cleanup.js           # one-command cleanup
+│   ├── tt-b-lifecycle.js         # 9-phase bootstrap orchestrator
+│   ├── tt-b-mcp-server.js        # MCP server (stdio)
+│   └── tt-b-rest-server.js       # REST API server
+├── functions/                    # Fine-grained memory capability modules
+│   ├── index.js                  # barrel export
+│   ├── provider.js               # file system I/O abstraction
+│   ├── config.js                 # configuration loader
+│   ├── read-memory.js            # read memory by key or path
+│   ├── write-memory.js           # write memory
+│   ├── list-memory.js            # list memory files with metadata
+│   ├── search-memory.js          # regex search across memory
+│   ├── build-index.js            # build full-text search index
+│   ├── search-index.js           # query pre-built index
+│   ├── snapshot-memory.js        # point-in-time snapshot
+│   ├── restore-memory.js         # restore from snapshot
+│   ├── diff-memory.js            # diff against old snapshot
+│   ├── verify-memory.js          # staleness/placeholder checks
+│   ├── health-check.js           # built-in health checks
+│   ├── extract-nodes.js          # knowledge graph node extraction
+│   └── extract-edges.js          # knowledge graph edge extraction
+├── packages/
+│   ├── plugin/                   # Claude/Codex UX layer
+│   │   ├── index.js
+│   │   ├── hooks.js              # Claude Code hook definitions & merge
+│   │   ├── preflight.js          # model detection (standalone)
+│   │   └── managed-block.js      # instruction block merge/remove
+│   └── integrations/             # Horizontal extension adapters
+│       ├── index.js
+│       ├── opencode.js           # OpenCode config merge/clean
+│       ├── mcp.js                # MCP JSON-RPC 2.0 protocol handler
+│       ├── rest.js               # REST API route definitions
+│       └── viewer.js             # HTML dashboard
+├── plugin/                       # Plugin distribution (hooks, scripts, skills)
+│   ├── .claude-plugin/plugin.json
+│   ├── .codex-plugin/plugin.json
+│   ├── .mcp.json                 # MCP server config
+│   ├── hooks/
+│   │   ├── hooks.json            # Claude hooks (8 types)
+│   │   └── hooks.codex.json      # Codex hooks (6 types)
+│   ├── scripts/                  # Thin-client hook scripts (.mjs)
+│   └── skills/                   # User-invocable skills (SKILL.md)
+├── .claude-plugin/marketplace.json
+├── .codex-plugin/marketplace.json
+└── templates/                    # Clean import templates
+    ├── claude/
+    │   ├── settings.json
+    │   └── memory/
+    └── opencode/
+```
+
+**Main package** (`bin/`) — long-term service lifecycle.
+**`functions/`** — fine-grained, independently testable memory modules.
+**`packages/plugin/`** — Claude/Codex user experience (hooks, preflight, managed blocks).
+**`packages/integrations/`** — horizontal adapters (REST, MCP, OpenCode, viewer).
+
+## What this repo contains
+
+- `CLAUDE.md` - project-level startup and reasoning contract
+- `.claude/bin/model-preflight.js` - best-effort host/model/capability detection helper
+- `.claude/bin/memory-reminder.js` - non-blocking hook helper that reminds agents to consult and update memory
+- `.claude/settings.json` - Claude Code hook registration for startup, resume, compaction, and substantial prompt reminders
+- `functions/` - 15 fine-grained memory capability modules (provider, CRUD, search, snapshot, diff, verify, health, graph extraction)
+- `packages/plugin/` - Claude/Codex UX (hooks, preflight, managed blocks)
+- `packages/integrations/` - horizontal adapters (REST, MCP, OpenCode, viewer)
+- `bin/tt-b-lifecycle.js` - 9-phase bootstrap orchestrator using functions/ and packages/
+- `bin/tt-b-mcp-server.js` - MCP server using packages/integrations/mcp
+- `bin/tt-b-rest-server.js` - REST API using packages/integrations/rest
+- `bin/tt-b-cleanup.js` - one-command cleanup
+- `bin/import-agent-workflow.js` - one-command importer
+- `plugin/` - plugin distribution (8 hooks, 4 skills, thin-client scripts)
+- `.claude-plugin/` - Claude Code marketplace manifest
+- `.codex-plugin/` - Codex marketplace manifest
+- `templates/` - clean import templates for new target projects
+
+## Universal Agent Integration
+
+`tt-b` is intentionally file-first. The stable contract is the generated
+instruction and memory layout, not one specific vendor runtime:
+
+- instruction files: read `CLAUDE.md`, `AGENTS.md`, and memory files directly
+- hooks: call `.claude/bin/memory-reminder.js` during startup, resume, or user prompt events
+- MCP: `.claude/bin/tt-b-mcp-server.js` exposes memory files as MCP resources and helper scripts as MCP tools
+- REST API: `.claude/bin/tt-b-rest-server.js` exposes endpoints at `/preflight`,
+  `/memory/reminder`, and `/workflow/import`
+
+Integration pattern:
+
+1. Install the workflow into a target project.
+2. Make the agent load `CLAUDE.md` or `AGENTS.md` as its instruction source.
+3. Make the agent read `.claude/memory/knowledge-graph.md` and
+   `.claude/memory/session-state.md` before non-trivial work.
+4. Optionally call `.claude/bin/model-preflight.js` to classify host, model, and
+   execution mode.
+5. Optionally call `.claude/bin/memory-reminder.js` from hooks, MCP, or REST to
+   inject a non-blocking memory reminder.
+6. After meaningful verified work, update the memory files with stable facts and
+   the current execution cursor.
+
+This means the project can teach one portable agent workflow while still letting
+each runtime choose its own integration surface.
+
+### Plugin System
+
+`tt-b` can be installed as a Claude Code or Codex plugin for marketplace
+discovery and automatic hook registration.
+
+**Plugin structure:**
+
+```
+.claude-plugin/marketplace.json   # Claude marketplace entry
+.codex-plugin/marketplace.json    # Codex marketplace entry
+plugin/
+  .claude-plugin/plugin.json      # Claude plugin manifest
+  .codex-plugin/plugin.json       # Codex plugin manifest
+  .mcp.json                       # MCP server config
+  hooks/
+    hooks.json                    # Claude hooks (8 types)
+    hooks.codex.json              # Codex hooks (6 types)
+  scripts/
+    session-start.mjs             # Thin client: register session + inject context
+    prompt-submit.mjs             # Thin client: capture user prompt
+    pre-tool-use.mjs              # Thin client: enrich context for file ops
+    post-tool-use.mjs             # Thin client: capture tool output
+    pre-compact.mjs               # Thin client: inject before compaction
+    stop.mjs                      # Thin client: update session cursor
+    subagent-start.mjs            # Thin client: record subagent start
+    subagent-stop.mjs             # Thin client: record subagent stop
+  skills/
+    remember/SKILL.md             # Save insight to memory
+    recall/SKILL.md               # Search memory
+    forget/SKILL.md               # Delete from memory (with confirmation)
+    session-history/SKILL.md      # Show execution cursor
+```
+
+**Hook types (Claude: 8, Codex: 6):**
+
+| Hook | Script | Description |
+|------|--------|-------------|
+| `SessionStart` | `session-start.mjs` | Register session, optionally inject memory context |
+| `UserPromptSubmit` | `prompt-submit.mjs` | Capture user prompt as observation |
+| `PreToolUse` | `pre-tool-use.mjs` | Enrich context for Edit/Write/Read tools |
+| `PostToolUse` | `post-tool-use.mjs` | Capture tool output as observation |
+| `PreCompact` | `pre-compact.mjs` | Inject context before compaction |
+| `SubagentStart` | `subagent-start.mjs` | Record subagent start event |
+| `SubagentStop` | `subagent-stop.mjs` | Record subagent completion |
+| `Stop` | `stop.mjs` | Trigger session cursor update |
+
+All hook scripts are thin clients: they read stdin JSON and POST to the tt-b
+REST server. They include a recursion guard (`isSdkChildContext`) to prevent
+hook loops in SDK child sessions.
+
+**Skills (4 user-invocable commands):**
+
+| Skill | Description |
+|-------|-------------|
+| `/remember` | Save an insight, decision, or fact to knowledge-graph memory |
+| `/recall` | Search project memory for past decisions and context |
+| `/forget` | Remove specific memory entries (requires confirmation) |
+| `/session-history` | Show the current execution cursor and session state |
+
+**Environment variables for hook scripts:**
+
+- `TTB_REST_URL` — REST server URL (default: `http://localhost:3742`)
+- `TTB_INJECT_CONTEXT` — Set to `true` to inject memory context on session start and pre-compact
+- `TTB_SDK_CHILD` — Set to `1` to skip hooks (recursion guard)
+
+### MCP Server
+
+The MCP server communicates over stdio using the MCP JSON-RPC 2.0 protocol.
+
+Resources:
+
+| URI | Description |
+|-----|-------------|
+| `tt-b://memory/knowledge-graph` | Long-term project memory |
+| `tt-b://memory/session-state` | Short-term execution cursor |
+| `tt-b://contract/claude-md` | CLAUDE.md startup contract |
+| `tt-b://contract/agents-md` | AGENTS.md instructions |
+
+Tools:
+
+| Tool | Description |
+|------|-------------|
+| `tt-b_preflight` | Detect host, model, capability tier, and startup mode |
+| `tt-b_memory_list` | List all memory files with metadata |
+| `tt-b_memory_read` | Read a memory file by name or path |
+| `tt-b_memory_write` | Write or update a memory file |
+| `tt-b_memory_search` | Search memory files for a regex pattern |
+| `tt-b_memory_snapshot` | Create a point-in-time snapshot of all memory files |
+| `tt-b_memory_diff` | Diff a memory file against old content |
+| `tt-b_memory_restore` | Restore memory from a snapshot |
+| `tt-b_memory_verify` | Verify memory files for staleness and placeholders |
+| `tt-b_memory_nodes` | Extract all knowledge graph nodes |
+| `tt-b_memory_edges` | Extract all knowledge graph edges |
+
+Usage with Claude Code or any MCP client:
+
+```bash
+node .claude/bin/tt-b-mcp-server.js
+```
+
+Set `TTB_PROJECT_ROOT` to override the project root directory.
+
+### REST API Server
+
+The REST API server uses Node.js built-in `http` module. No external dependencies.
+
+```bash
+node .claude/bin/tt-b-rest-server.js
+```
+
+Endpoints:
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/health` | Health check |
+| `GET` | `/preflight` | Model preflight (query: `host`, `model`) |
+| `POST` | `/memory/reminder` | Memory reminder (body: `{event?, prompt?, source?}`) |
+| `POST` | `/workflow/import` | Import workflow (body: `{targetDir, force?, dryRun?}`) |
+| `GET` | `/memory/list` | List memory files |
+| `GET` | `/memory/read` | Read memory (query: `name`) |
+| `POST` | `/memory/search` | Search memory (body: `{pattern}`) |
+| `GET` | `/memory/snapshot` | Snapshot all memory |
+| `POST` | `/memory/restore` | Restore from snapshot |
+| `GET` | `/memory/verify` | Verify staleness |
+| `GET` | `/memory/nodes` | Knowledge graph nodes |
+| `GET` | `/memory/edges` | Knowledge graph edges |
+| `POST` | `/memory/diff` | Diff memory (body: `{name, oldContent}`) |
+| `POST` | `/memory/write` | Write memory (body: `{name, content}`) |
+| `POST` | `/memory/observe` | Hook event ingestion |
+
+Configuration:
+
+- `TTB_REST_PORT` — listen port (default: `3742`)
+- `TTB_PROJECT_ROOT` — project root directory (default: cwd)
+- `TTB_REST_URL` — REST server URL for hook scripts (default: `http://localhost:{port}`)
+
+Example:
+
+```bash
+curl http://localhost:3742/preflight?host=codex&model=gpt-5.5
+curl -X POST http://localhost:3742/memory/reminder -H "Content-Type: application/json" -d '{"source":"startup"}'
+```
+
+### Lifecycle Bootstrap
+
+The lifecycle hook is a full application bootstrap orchestrator that runs 9
+sequential phases:
+
+```bash
+node .claude/bin/tt-b-lifecycle.js
+```
+
+Phases:
+
+| # | Phase | Description |
+|---|-------|-------------|
+| 1 | Load config | Read env vars, CLI args, defaults |
+| 2 | Initialize provider | Create memory file read/write/search abstraction |
+| 3 | Start worker | Background periodic tasks (staleness checks) |
+| 4 | Register memory functions | read, write, search, diff, snapshot, restore, verify, nodes, edges |
+| 5 | Register REST endpoints | All memory + preflight + import + lifecycle endpoints |
+| 6 | Register MCP endpoints | MCP tools for memory functions (off by default, use `--mcp`) |
+| 7 | Start viewer | HTML dashboard on `:3743` with live health, memory, and graph stats |
+| 8 | Initialize health check | 4 built-in checks: memory files, helper scripts, staleness, syntax |
+| 9 | Initialize search index | Full-text index of headings, nodes, paths, and words |
+
+Options:
+
+```bash
+--port PORT          REST API port (default: 3742)
+--viewer-port PORT   Viewer dashboard port (default: 3743)
+--no-viewer          Disable viewer dashboard
+--no-rest            Disable REST API
+--mcp                Enable MCP server (stdio)
+```
+
+Additional endpoints (beyond the standalone REST server):
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/lifecycle/status` | All 9 phase results with timing |
+| `GET` | `/health/detailed` | 4 built-in health checks + worker warnings |
+| `POST` | `/search` | Full-text search (body: `{query}`) |
+| `GET` | `/search/stats` | Search index stats (files, terms, by type) |
+
+The viewer dashboard at `http://localhost:3743` provides a live HTML interface
+showing health status, memory file metadata, knowledge graph node/edge counts,
+and buttons for verify, snapshot, and search.
+
+## Startup flow
+
+1. Detect the active CLI host.
+2. Detect the effective model.
+3. Classify the model into a capability tier.
+4. Read `CLAUDE.md`.
+5. Recover `.claude/memory/knowledge-graph.md` and `.claude/memory/session-state.md`.
+6. Verify important memory claims against real files.
+7. Plan, execute, test, and update memory after meaningful work.
+
+## Memory reminder hooks
+
+Imported projects include a non-blocking Claude Code hook reminder. The hook
+runs on `SessionStart` and substantial `UserPromptSubmit` events, then injects
+advisory context reminding the agent to:
+
+- skim `.claude/memory/knowledge-graph.md` and `.claude/memory/session-state.md`
+- treat memory as a map rather than source of truth
+- verify important claims against real files before editing
+- update stable facts and the current execution cursor after meaningful work
+
+The reminder is intentionally soft. It does not block prompts, and trivial
+prompts can ignore it.
+
+## Model detection
+
+The helper follows this precedence:
+
+1. CLI arguments such as `--model`, `-m`, or `-c model="..."`
+2. Environment variables such as `AI_MODEL`, `MODEL`, `CLAUDE_MODEL`, `CODEX_MODEL`, `OPENCODE_MODEL`
+3. Host-specific config files
+4. `unknown`
+
+Example:
+
+```bash
+node .claude/bin/model-preflight.js --host codex --model gpt-5.5
+```
+
+Text output:
+
+```bash
+Host: codex
+Model: gpt-5.5
+Source: cli-arg
+Capability: architect_orchestrator
+Startup mode: restore-plan-delegate-verify-update-memory
+```
+
+## Capability tiers
+
+- `architect_orchestrator` - high-level planning, risk review, knowledge graph updates, task decomposition
+- `engineering_executor` - code reading, editing, tests, refactors, failure fixing
+- `reader_or_tester` - bounded read-only investigation or targeted verification
+- `unknown` - safe probe only
+
+## Project memory
+
+This repo treats memory as a graph, not a diary.
+
+- stable facts belong in `.claude/memory/knowledge-graph.md`
+- current task state belongs in `.claude/memory/session-state.md`
+- code evidence outranks memory
+- stale assumptions must be corrected when code contradicts them
+
+## Verification
+
+This workspace is documentation-heavy and does not ship an application test suite.
+The importer and helper can still be checked locally:
+
+```bash
+node --check bin/import-agent-workflow.js
+node --check .claude/bin/model-preflight.js
+node --check .claude/bin/memory-reminder.js
+./.claude/bin/model-preflight.js --host codex --model gpt-5.5 --text
+```
+
+## Repository status
+
+This project is intentionally small and opinionated. The main goal is to provide a reusable startup pattern for agentic work, not a user-facing app.
+
+## Notes
+
+- Canonical memory lives under `.claude/memory/`.
+- Legacy mirror files are kept only for compatibility.
+- If this workspace is embedded into a larger project later, keep the startup contract and memory layout intact.

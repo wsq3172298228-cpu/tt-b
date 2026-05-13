@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "tt-b": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/../.claude/bin/tt-b-mcp-server.js"]
+    }
+  }
+}
