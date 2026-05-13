@@ -87,8 +87,7 @@ legacy files are kept. With `--force`, everything tt-b related is removed.
 
 ## Install from GitHub
 
-After publishing this repository to GitHub, users can import the workflow with
-one command:
+You can import the workflow with the click of a command:
 
 ```bash
 npx --yes github:YOUR_GITHUB_USERNAME/tt-b /path/to/target-project
@@ -99,41 +98,6 @@ From inside the target project, the shortest form is:
 ```bash
 npx --yes github:YOUR_GITHUB_USERNAME/tt-b .
 ```
-
-Replace `YOUR_GITHUB_USERNAME` with the GitHub account or organization that owns
-the repository. This works because `package.json` exposes the importer as the
-single `tt-b` executable.
-
-To publish:
-
-```bash
-git init
-git add .
-cat > /tmp/tt-b-commit-message.txt <<'EOF'
-Enable GitHub-based workflow installs
-
-Constraint: Users should be able to run the importer through npx from GitHub without cloning first.
-Confidence: high
-Scope-risk: narrow
-Tested: npm run verify; npm pack --dry-run
-Not-tested: GitHub Actions before the first push
-EOF
-git commit -F /tmp/tt-b-commit-message.txt
-git branch -M main
-git remote add origin git@github.com:YOUR_GITHUB_USERNAME/tt-b.git
-git push -u origin main
-```
-
-Before pushing, run:
-
-```bash
-npm run verify
-npm pack --dry-run
-```
-
-On GitHub, you can also mark the repository as a template repository in
-`Settings -> General -> Template repository` so users see a **Use this template**
-button.
 
 ## Architecture
 
