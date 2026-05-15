@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Check scripts
+        run: npm run verify
+
+      - name: Smoke test import
+        run: |
+          mkdir -p /tmp/tt-b-target
+          node bin/import-agent-workflow.js /tmp/tt-b-target
+          test -f /tmp/tt-b-target/CLAUDE.md
+          test -f /tmp/tt-b-target/AGENTS.md
+          test -f /tmp/tt-b-target/.claude/bin/model-preflight.js
+          test -f /tmp/tt-b-target/.claude/bin/memory-reminder.js
+          test -f /tmp/tt-b-target/.claude/memory/knowledge-graph.md
+          test -f /tmp/tt-b-target/opencode.json
