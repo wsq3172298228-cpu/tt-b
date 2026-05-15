@@ -20,7 +20,7 @@ Canonical memory lives under `.claude/memory/`. Legacy mirrors, if any, are not 
 
 ## Advisory Memory Reminder Hook
 
-Claude Code imports may register `.claude/settings.json` hooks that run
+This workflow may register `.claude/settings.json` hooks that run
 `.claude/bin/memory-reminder.js` on startup, resume, compaction, and substantial
 user prompts.
 
