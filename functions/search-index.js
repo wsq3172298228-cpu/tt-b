@@ -18,8 +18,8 @@ function searchIndex({ query, index }) {
     }
   }
 
-  // Fuzzy fallback
-  if (results.length === 0) {
+  // Fuzzy fallback (only for queries >= 3 chars to avoid matching everything)
+  if (results.length === 0 && q.length >= 3) {
     for (const [key, locations] of index) {
       const term = key.split(":")[1] || key;
       if (term.includes(q) || q.includes(term)) {

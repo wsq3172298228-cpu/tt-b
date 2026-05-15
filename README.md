@@ -1,3 +1,9 @@
+<div align="right">
+
+[English](README.md) | [中文](README-zh-CN.md)
+
+</div>
+
 # tt-b
 
 `tt-b` is a model-aware agent workflow kit for memory-backed engineering tasks.
@@ -39,7 +45,7 @@ It creates or updates:
 - `.claude/bin/memory-reminder.js` - non-blocking memory reminder hook helper
 - `.claude/bin/tt-b-mcp-server.js` - MCP server exposing memory resources and tools
 - `.claude/bin/tt-b-rest-server.js` - REST API server for HTTP-based integration
-- `.claude/bin/tt-b-lifecycle.js` - Full lifecycle bootstrap with 9 phases (config, provider, worker, memory functions, REST, MCP, viewer, health, search index)
+- `.claude/bin/tt-b-lifecycle.js` - Full lifecycle bootstrap with 8 phases (config, provider, memory functions, REST, MCP, viewer, health, search index)
 - `.claude/settings.json` - Claude Code hook registration for memory reminders
 - `.claude/memory/knowledge-graph.md` - clean long-term memory template
 - `.claude/memory/session-state.md` - clean current-task state template
@@ -99,6 +105,98 @@ From inside the target project, the shortest form is:
 npx --yes github:YOUR_GITHUB_USERNAME/tt-b .
 ```
 
+## Quick Start by Platform
+
+### Claude Code (plugin, recommended)
+
+```
+Install tt-b as a Claude Code plugin: run `/plugin marketplace add wsq3172298228-cpu/tt-b` then `/plugin install tt-b` — the plugin registers 8 hooks, auto-wires the MCP server via `.mcp.json`, and exposes 10 skills (/remember, /recall, /forget, /verify, /preflight, /graph, /memories, /session-history, /snapshot, /grill-me). No extra config needed.
+```
+
+### Claude Code (npx one-click import)
+
+```bash
+# from inside your target project
+npx --yes github:wsq3172298228-cpu/tt-b .
+```
+
+This generates `CLAUDE.md`, `.claude/settings.json`, memory templates, and all helper scripts. Existing files are preserved.
+
+### Claude Code (global deploy)
+
+```bash
+# deploy tt-b configs to ~/.claude/ (all projects)
+npx --yes github:wsq3172298228-cpu/tt-b-deploy
+# or from this repo:
+node bin/claude-global-deploy.js
+```
+
+Options: `--dry-run`, `--restore`, `--delete`, `--verify`, `--list-backups`.
+
+### Codex CLI
+
+```bash
+# install tt-b plugin for Codex (6 hooks, 11 MCP tools, 10 skills)
+node bin/tt-b-codex-install.js
+```
+
+This registers the tt-b marketplace, installs the plugin, and adds the MCP server to `~/.codex/config.toml`.
+
+Options: `--remove`, `--status`.
+
+### OpenCode
+
+```bash
+# import workflow into current project (generates AGENTS.md + opencode.json)
+node bin/import-agent-workflow.js .
+```
+
+The importer creates `AGENTS.md` (OpenCode-compatible instructions) and registers it in `opencode.json`.
+
+### OpenClaw
+
+```bash
+# install tt-b MCP server for OpenClaw
+node bin/tt-b-openclaw-install.js
+```
+
+This adds the tt-b MCP server to `~/.openclaw/openclaw.json` and copies integration files to `~/.openclaw/extensions/tt-b`.
+
+Options: `--remove`, `--status`.
+
+### Universal MCP (any tool that supports MCP)
+
+Add this to your tool's MCP server config:
+
+```json
+{
+  "mcpServers": {
+    "tt-b": {
+      "command": "node",
+      "args": ["/path/to/tt-b/bin/tt-b-mcp-server.js"]
+    }
+  }
+}
+```
+
+Exposes 4 resources (memory files, contracts) and 11 tools (CRUD, search, snapshot, verify, graph extraction). Works with Cursor, Windsurf, Continue, Cline, and any MCP-compatible client.
+
+### Verify installation
+
+After installing for any platform, verify with:
+
+```bash
+# check generated files exist
+ls .claude/memory/knowledge-graph.md .claude/memory/session-state.md
+
+# verify helper scripts
+node .claude/bin/model-preflight.js --help
+node .claude/bin/tt-b-mcp-server.js --help
+
+# run health check (if lifecycle is available)
+node .claude/bin/tt-b-lifecycle.js --help
+```
+
 ## Architecture
 
 ```
@@ -106,7 +204,7 @@ tt-b/
 ├── bin/                          # CLI entry points (thin wrappers)
 │   ├── import-agent-workflow.js  # one-command importer
 │   ├── tt-b-cleanup.js           # one-command cleanup
-│   ├── tt-b-lifecycle.js         # 9-phase bootstrap orchestrator
+│   ├── tt-b-lifecycle.js         # 8-phase bootstrap orchestrator
 │   ├── tt-b-mcp-server.js        # MCP server (stdio)
 │   └── tt-b-rest-server.js       # REST API server
 ├── functions/                    # Fine-grained memory capability modules
@@ -170,12 +268,12 @@ tt-b/
 - `functions/` - 15 fine-grained memory capability modules (provider, CRUD, search, snapshot, diff, verify, health, graph extraction)
 - `packages/plugin/` - Claude/Codex UX (hooks, preflight, managed blocks)
 - `packages/integrations/` - horizontal adapters (REST, MCP, OpenCode, viewer)
-- `bin/tt-b-lifecycle.js` - 9-phase bootstrap orchestrator using functions/ and packages/
+- `bin/tt-b-lifecycle.js` - 8-phase bootstrap orchestrator using functions/ and packages/
 - `bin/tt-b-mcp-server.js` - MCP server using packages/integrations/mcp
 - `bin/tt-b-rest-server.js` - REST API using packages/integrations/rest
 - `bin/tt-b-cleanup.js` - one-command cleanup
 - `bin/import-agent-workflow.js` - one-command importer
-- `plugin/` - plugin distribution (8 hooks, 4 skills, thin-client scripts)
+- `plugin/` - plugin distribution (8 hooks, 10 skills, thin-client scripts)
 - `.claude-plugin/` - Claude Code marketplace manifest
 - `.codex-plugin/` - Codex marketplace manifest
 - `templates/` - clean import templates for new target projects
@@ -238,6 +336,12 @@ plugin/
     recall/SKILL.md               # Search memory
     forget/SKILL.md               # Delete from memory (with confirmation)
     session-history/SKILL.md      # Show execution cursor
+    snapshot/SKILL.md             # Snapshot all memory files
+    verify/SKILL.md               # Check memory health and staleness
+    preflight/SKILL.md            # Detect host, model, capability tier
+    graph/SKILL.md                # Show knowledge graph nodes and edges
+    memories/SKILL.md             # List memory files with metadata
+    grill-me/SKILL.md             # Interview user to clarify goals, update memory
 ```
 
 **Hook types (Claude: 8, Codex: 6):**
@@ -257,7 +361,7 @@ All hook scripts are thin clients: they read stdin JSON and POST to the tt-b
 REST server. They include a recursion guard (`isSdkChildContext`) to prevent
 hook loops in SDK child sessions.
 
-**Skills (4 user-invocable commands):**
+**Skills (10 user-invocable commands):**
 
 | Skill | Description |
 |-------|-------------|
@@ -265,6 +369,12 @@ hook loops in SDK child sessions.
 | `/recall` | Search project memory for past decisions and context |
 | `/forget` | Remove specific memory entries (requires confirmation) |
 | `/session-history` | Show the current execution cursor and session state |
+| `/snapshot` | Create a point-in-time snapshot of all memory files |
+| `/verify` | Check memory for staleness, placeholders, and inconsistencies |
+| `/preflight` | Detect the current host CLI, model, and capability tier |
+| `/graph` | Show the knowledge graph — all nodes and edges from memory |
+| `/memories` | List all memory files with metadata (size, modified, entries) |
+| `/grill-me` | Interview user to clarify goals, informed by memory, updates knowledge graph |
 
 **Environment variables for hook scripts:**
 
@@ -365,13 +475,12 @@ Phases:
 |---|-------|-------------|
 | 1 | Load config | Read env vars, CLI args, defaults |
 | 2 | Initialize provider | Create memory file read/write/search abstraction |
-| 3 | Start worker | Background periodic tasks (staleness checks) |
-| 4 | Register memory functions | read, write, search, diff, snapshot, restore, verify, nodes, edges |
-| 5 | Register REST endpoints | All memory + preflight + import + lifecycle endpoints |
-| 6 | Register MCP endpoints | MCP tools for memory functions (off by default, use `--mcp`) |
-| 7 | Start viewer | HTML dashboard on `:3743` with live health, memory, and graph stats |
-| 8 | Initialize health check | 4 built-in checks: memory files, helper scripts, staleness, syntax |
-| 9 | Initialize search index | Full-text index of headings, nodes, paths, and words |
+| 3 | Register memory functions | read, write, search, diff, snapshot, restore, verify, nodes, edges |
+| 4 | Register REST endpoints | All memory + preflight + import + lifecycle endpoints |
+| 5 | Register MCP endpoints | MCP tools for memory functions (off by default, use `--mcp`) |
+| 6 | Start viewer | HTML dashboard on `:3743` with live health, memory, and graph stats |
+| 7 | Initialize health check | 4 built-in checks: memory files, helper scripts, staleness, syntax |
+| 8 | Initialize search index | Full-text index of headings, nodes, paths, and words |
 
 Options:
 
@@ -387,8 +496,8 @@ Additional endpoints (beyond the standalone REST server):
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/lifecycle/status` | All 9 phase results with timing |
-| `GET` | `/health/detailed` | 4 built-in health checks + worker warnings |
+| `GET` | `/lifecycle/status` | All 8 phase results with timing |
+| `GET` | `/health/detailed` | 4 built-in health checks (on-demand, no background worker) |
 | `POST` | `/search` | Full-text search (body: `{query}`) |
 | `GET` | `/search/stats` | Search index stats (files, terms, by type) |
 

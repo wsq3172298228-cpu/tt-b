@@ -49,7 +49,9 @@ function main() {
 
     try {
       const result = await handler(req, res, {}, url);
-      jsonResponse(res, 200, result);
+      const status = (result && result._status) || 200;
+      if (result && result._status) delete result._status;
+      jsonResponse(res, status, result);
     } catch (err) {
       jsonResponse(res, 500, { error: err.message });
     }
@@ -72,6 +74,8 @@ function main() {
     process.stdout.write(`  GET  /memory/nodes        — graph nodes\n`);
     process.stdout.write(`  GET  /memory/edges        — graph edges\n`);
     process.stdout.write(`  POST /memory/diff         — diff\n`);
+    process.stdout.write(`  POST /memory/write        — write memory\n`);
+    process.stdout.write(`  POST /memory/observe      — hook event ingestion\n`);
   });
 
   process.on("SIGINT", () => server.close(() => process.exit(0)));

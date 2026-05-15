@@ -9,7 +9,6 @@ const DEFAULTS = {
   projectRoot: process.cwd(),
   restPort: 3742,
   viewerPort: 3743,
-  workerInterval: 60000,
   enableViewer: true,
   enableRest: true,
   enableMcp: false,
@@ -40,7 +39,6 @@ function loadConfig(argv) {
   if (process.env.TTB_PROJECT_ROOT) config.projectRoot = process.env.TTB_PROJECT_ROOT;
   if (process.env.TTB_REST_PORT) config.restPort = parseInt(process.env.TTB_REST_PORT, 10);
   if (process.env.TTB_VIEWER_PORT) config.viewerPort = parseInt(process.env.TTB_VIEWER_PORT, 10);
-  if (process.env.TTB_WORKER_INTERVAL) config.workerInterval = parseInt(process.env.TTB_WORKER_INTERVAL, 10);
   if (process.env.TTB_REST_URL) config.restUrl = process.env.TTB_REST_URL;
 
   // Derived

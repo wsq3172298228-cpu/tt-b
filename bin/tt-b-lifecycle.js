@@ -3,24 +3,22 @@
 /**
  * tt-b Lifecycle Hook
  *
- * Full application bootstrap orchestrator. Runs 9 sequential phases:
+ * Full application bootstrap orchestrator. Runs 8 sequential phases:
  *
  *   1. Load config              → functions/config
  *   2. Initialize provider      → functions/provider
- *   3. Start worker             → inline (periodic health checks)
- *   4. Register memory functions → functions/*
- *   5. Register REST endpoints  → packages/integrations/rest
- *   6. Register MCP endpoints   → packages/integrations/mcp
- *   7. Start viewer             → packages/integrations/viewer
- *   8. Initialize health check  → functions/health-check
- *   9. Initialize search index  → functions/build-index + functions/search-index
+ *   3. Register memory functions → functions/*
+ *   4. Register REST endpoints  → packages/integrations/rest
+ *   5. Register MCP endpoints   → packages/integrations/mcp
+ *   6. Start viewer             → packages/integrations/viewer
+ *   7. Initialize health check  → functions/health-check
+ *   8. Initialize search index  → functions/build-index + functions/search-index
  *
  * Usage:
  *   node bin/tt-b-lifecycle.js [--port PORT] [--viewer-port PORT] [--no-viewer] [--no-rest] [--mcp]
  */
 
 const http = require("http");
-const { EventEmitter } = require("events");
 
 const fn = require("../functions");
 const integrations = require("../packages/integrations");
@@ -54,7 +52,6 @@ function readBody(req) {
 function main() {
   const argv = process.argv.slice(2);
   const startTime = Date.now();
-  const bus = new EventEmitter();
   const phaseResults = [];
 
   function phase(name, fn) {
@@ -84,102 +81,68 @@ function main() {
   // Phase 2: Initialize provider
   const provider = phase("2. init-provider", () => fn.createProvider(config.projectRoot));
 
-  // Phase 3: Start worker
-  const worker = phase("3. start-worker", () => {
-    const state = { ticks: 0, lastTick: null };
-    const timer = setInterval(() => {
-      state.ticks++;
-      state.lastTick = new Date().toISOString();
-
-      // Check staleness
-      for (const [, relPath] of Object.entries(config.memoryMap)) {
-        const stat = provider.stat(relPath);
-        if (!stat.ok) { bus.emit("health:warn", { type: "missing-memory", file: relPath }); continue; }
-        const age = Date.now() - new Date(stat.mtime).getTime();
-        if (age > 24 * 3600000) bus.emit("health:warn", { type: "stale-memory", file: relPath, ageHours: Math.round(age / 3600000) });
-      }
-
-      bus.emit("worker:tick", { ticks: state.ticks, timestamp: state.lastTick });
-    }, config.workerInterval);
-
-    // Run immediately
-    clearInterval(timer);
-    const immediateTimer = setInterval(() => {
-      state.ticks++;
-      state.lastTick = new Date().toISOString();
-      bus.emit("worker:tick", { ticks: state.ticks, timestamp: state.lastTick });
-    }, config.workerInterval);
-    state.ticks++;
-    state.lastTick = new Date().toISOString();
-
-    return { state, stop() { clearInterval(immediateTimer); } };
+  // Phase 3: Register memory functions (internal API, used by phases 4-8)
+  phase("3. register-memory-functions", () => {
+    const required = [
+      "readMemory", "writeMemory", "listMemory", "searchMemory",
+      "snapshotMemory", "restoreMemory", "diffMemory",
+      "verifyMemory", "extractNodes", "extractEdges",
+    ];
+    const missing = required.filter((name) => typeof fn[name] !== "function");
+    if (missing.length > 0) throw new Error(`Missing function exports: ${missing.join(", ")}`);
   });
 
-  // Phase 4: Register memory functions (internal API, used by phases 5-9)
-  phase("4. register-memory-functions", () => {
-    // Validate that all function modules load correctly
-    fn.readMemory; fn.writeMemory; fn.listMemory; fn.searchMemory;
-    fn.snapshotMemory; fn.restoreMemory; fn.diffMemory;
-    fn.verifyMemory; fn.extractNodes; fn.extractEdges;
-  });
-
-  // Phase 5: Register REST endpoints
+  // Phase 4: Register REST endpoints
   const routes = new Map();
   let restServer = null;
   if (config.enableRest) {
-    phase("5. register-rest-endpoints", () => {
+    phase("4. register-rest-endpoints", () => {
       integrations.rest.registerRoutes({ routes, config, provider });
     });
   } else {
-    phaseResults.push({ phase: "5. register-rest-endpoints", ok: true, duration: 0, skipped: true });
-    process.stdout.write("  [5. register-rest-endpoints] skipped\n");
+    phaseResults.push({ phase: "4. register-rest-endpoints", ok: true, duration: 0, skipped: true });
+    process.stdout.write("  [4. register-rest-endpoints] skipped\n");
   }
 
-  // Phase 6: Register MCP endpoints
+  // Phase 5: Register MCP endpoints
   let mcpHandler = null;
   if (config.enableMcp) {
-    mcpHandler = phase("6. register-mcp-endpoints", () => {
+    mcpHandler = phase("5. register-mcp-endpoints", () => {
       return integrations.mcp.createMcpHandler({ provider, config });
     });
     process.stdout.write(`     MCP: ${mcpHandler.TOOLS.length} tools registered\n`);
   } else {
-    phaseResults.push({ phase: "6. register-mcp-endpoints", ok: true, duration: 0, skipped: true });
-    process.stdout.write("  [6. register-mcp-endpoints] skipped (use --mcp to enable)\n");
+    phaseResults.push({ phase: "5. register-mcp-endpoints", ok: true, duration: 0, skipped: true });
+    process.stdout.write("  [5. register-mcp-endpoints] skipped (use --mcp to enable)\n");
   }
 
-  // Phase 7: Start viewer
+  // Phase 6: Start viewer
   let viewerServer = null;
   if (config.enableViewer) {
-    viewerServer = phase("7. start-viewer", () => integrations.viewer.createViewer({ restPort: config.restPort }));
+    viewerServer = phase("6. start-viewer", () => integrations.viewer.createViewer({ restPort: config.restPort }));
     viewerServer.listen(config.viewerPort, () => {
       process.stdout.write(`     Viewer dashboard on :${config.viewerPort}\n`);
     });
   } else {
-    phaseResults.push({ phase: "7. start-viewer", ok: true, duration: 0, skipped: true });
-    process.stdout.write("  [7. start-viewer] skipped\n");
+    phaseResults.push({ phase: "6. start-viewer", ok: true, duration: 0, skipped: true });
+    process.stdout.write("  [6. start-viewer] skipped\n");
   }
 
-  // Phase 8: Initialize health check
-  const health = phase("8. init-health-check", () => {
-    const warnings = [];
-    bus.on("health:warn", (w) => warnings.push({ ...w, timestamp: new Date().toISOString() }));
-    return {
-      runAll() {
-        const result = fn.healthCheck({
-          memoryMap: config.memoryMap,
-          scriptsMap: config.scriptsMap,
-          exists: provider.exists,
-          stat: provider.stat,
-          staleDays: config.staleDays,
-        });
-        return { ...result, warnings: warnings.slice(-20) };
-      },
-      warnings,
-    };
-  });
+  // Phase 7: Initialize health check
+  const health = phase("7. init-health-check", () => ({
+    runAll() {
+      return fn.healthCheck({
+        memoryMap: config.memoryMap,
+        scriptsMap: config.scriptsMap,
+        exists: provider.exists,
+        stat: provider.stat,
+        staleDays: config.staleDays,
+      });
+    },
+  }));
 
-  // Phase 9: Initialize search index
-  const searchIndexData = phase("9. init-search-index", () => {
+  // Phase 8: Initialize search index
+  const searchIndexData = phase("8. init-search-index", () => {
     const built = fn.buildIndex({ memoryMap: config.memoryMap, readText: provider.readText, extraFiles: config.contractMap });
     return { ...built, search: (query) => fn.searchIndex({ query, index: built.index }) };
   });
@@ -197,8 +160,10 @@ function main() {
     routes.set("GET /health/detailed", () => health.runAll());
     routes.set("POST /search", async (req) => {
       const body = await readBody(req);
-      const { query } = JSON.parse(body);
-      if (!query) return { error: "query required" };
+      let parsed;
+      try { parsed = JSON.parse(body); } catch (e) { return { _status: 400, error: `Invalid JSON: ${e.message}` }; }
+      const { query } = parsed;
+      if (!query) return { _status: 400, error: "query required" };
       return searchIndexData.search(query);
     });
     routes.set("GET /search/stats", () => ({
@@ -214,7 +179,9 @@ function main() {
       if (!handler) { jsonResponse(res, 404, { error: `Not found: ${key}` }); return; }
       try {
         const result = await handler(req, res, {}, url);
-        jsonResponse(res, 200, result);
+        const status = (result && result._status) || 200;
+        if (result && result._status) delete result._status;
+        jsonResponse(res, status, result);
       } catch (err) { jsonResponse(res, 500, { error: err.message }); }
     });
 
@@ -249,7 +216,6 @@ function main() {
   // Graceful shutdown
   function shutdown() {
     process.stdout.write("\nShutting down...\n");
-    worker.stop();
     if (restServer) restServer.close();
     if (viewerServer) viewerServer.close();
     process.exit(0);

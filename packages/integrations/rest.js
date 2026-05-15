@@ -31,24 +31,26 @@ function registerRoutes({ routes, config, provider }) {
   route("GET", "/preflight", (_req, _res, _ctx, url) => {
     const host = url.searchParams.get("host");
     const model = url.searchParams.get("model");
-    if (!provider.exists(config.scriptsMap.preflight)) return { error: "model-preflight.js not found" };
+    if (!provider.exists(config.scriptsMap.preflight)) return { _status: 500, error: "model-preflight.js not found" };
     const args = [];
     if (host) args.push("--host", host);
     if (model) args.push("--model", model);
     try {
       return JSON.parse(execFileSync(process.execPath, [provider.resolve(config.scriptsMap.preflight), ...args], { cwd: config.projectRoot, timeout: 10000, encoding: "utf8" }));
-    } catch (e) { return { error: e.stderr || e.message }; }
+    } catch (e) { return { _status: 500, error: e.stderr || e.message }; }
   });
 
   // Memory reminder
   route("POST", "/memory/reminder", async (req) => {
     const body = await readBody(req);
-    const parsed = body.trim() ? JSON.parse(body) : {};
-    if (!provider.exists(config.scriptsMap.reminder)) return { error: "memory-reminder.js not found" };
+    const parsed = body.trim() ? parseJson(body, "body") : { ok: true, data: {} };
+    if (!parsed.ok) return { _status: parsed._status, error: parsed.error };
+    const { event, prompt, source } = parsed.data;
+    if (!provider.exists(config.scriptsMap.reminder)) return { _status: 500, error: "memory-reminder.js not found" };
     const hookInput = JSON.stringify({
-      hook_event_name: parsed.event || "UserPromptSubmit",
-      prompt: parsed.prompt || "non-trivial task",
-      source: parsed.source || "turn",
+      hook_event_name: event || "UserPromptSubmit",
+      prompt: prompt || "non-trivial task",
+      source: source || "turn",
       cwd: config.projectRoot,
     });
     try {
@@ -56,21 +58,23 @@ function registerRoutes({ routes, config, provider }) {
       if (!stdout.trim()) return { reminder: null, message: "No reminder needed." };
       const r = JSON.parse(stdout.trim());
       return { reminder: r.hookSpecificOutput?.additionalContext || null };
-    } catch (e) { return { error: e.stderr || e.message }; }
+    } catch (e) { return { _status: 500, error: e.stderr || e.message }; }
   });
 
   // Workflow import
   route("POST", "/workflow/import", async (req) => {
     const body = await readBody(req);
-    const parsed = JSON.parse(body);
-    if (!parsed.targetDir) return { error: "targetDir is required" };
-    if (!provider.exists(config.scriptsMap.importer)) return { error: "import-agent-workflow.js not found" };
-    const args = [parsed.targetDir];
-    if (parsed.force) args.push("--force");
-    if (parsed.dryRun) args.push("--dry-run");
+    const parsed = parseJson(body, "body");
+    if (!parsed.ok) return { _status: parsed._status, error: parsed.error };
+    const { targetDir, force, dryRun } = parsed.data;
+    if (!targetDir) return { _status: 400, error: "targetDir is required" };
+    if (!provider.exists(config.scriptsMap.importer)) return { _status: 500, error: "import-agent-workflow.js not found" };
+    const args = [targetDir];
+    if (force) args.push("--force");
+    if (dryRun) args.push("--dry-run");
     try {
       return { output: execFileSync(process.execPath, [provider.resolve(config.scriptsMap.importer), ...args], { cwd: config.projectRoot, timeout: 30000, encoding: "utf8" }).trim() };
-    } catch (e) { return { error: e.stderr || e.message }; }
+    } catch (e) { return { _status: 500, error: e.stderr || e.message }; }
   });
 
   // Memory CRUD
@@ -78,14 +82,16 @@ function registerRoutes({ routes, config, provider }) {
 
   route("GET", "/memory/read", (_req, _res, _ctx, url) => {
     const name = url.searchParams.get("name");
-    if (!name) return { error: "name is required" };
+    if (!name) return { _status: 400, error: "name is required" };
     return fn.readMemory({ name, memoryMap: config.memoryMap, readText: provider.readText });
   });
 
   route("POST", "/memory/search", async (req) => {
     const body = await readBody(req);
-    const { pattern } = JSON.parse(body);
-    if (!pattern) return { error: "pattern is required" };
+    const parsed = parseJson(body, "body");
+    if (!parsed.ok) return { _status: parsed._status, error: parsed.error };
+    const { pattern } = parsed.data;
+    if (!pattern) return { _status: 400, error: "pattern is required" };
     return fn.searchMemory({ pattern, memoryMap: config.memoryMap, readText: provider.readText });
   });
 
@@ -93,7 +99,9 @@ function registerRoutes({ routes, config, provider }) {
 
   route("POST", "/memory/restore", async (req) => {
     const body = await readBody(req);
-    return fn.restoreMemory({ snapshot: JSON.parse(body), memoryMap: config.memoryMap, writeText: provider.writeText });
+    const parsed = parseJson(body, "body");
+    if (!parsed.ok) return { _status: parsed._status, error: parsed.error };
+    return fn.restoreMemory({ snapshot: parsed.data, memoryMap: config.memoryMap, writeText: provider.writeText });
   });
 
   route("GET", "/memory/verify", () => fn.verifyMemory({ memoryMap: config.memoryMap, readText: provider.readText, staleDays: config.staleDays }));
@@ -110,22 +118,28 @@ function registerRoutes({ routes, config, provider }) {
 
   route("POST", "/memory/diff", async (req) => {
     const body = await readBody(req);
-    const { name, oldContent } = JSON.parse(body);
-    if (!name) return { error: "name is required" };
+    const parsed = parseJson(body, "body");
+    if (!parsed.ok) return { _status: parsed._status, error: parsed.error };
+    const { name, oldContent } = parsed.data;
+    if (!name) return { _status: 400, error: "name is required" };
     return fn.diffMemory({ name, oldContent, memoryMap: config.memoryMap, readText: provider.readText });
   });
 
   route("POST", "/memory/write", async (req) => {
     const body = await readBody(req);
-    const { name, content } = JSON.parse(body);
-    if (!name || content === undefined) return { error: "name and content are required" };
+    const parsed = parseJson(body, "body");
+    if (!parsed.ok) return { _status: parsed._status, error: parsed.error };
+    const { name, content } = parsed.data;
+    if (!name || content === undefined) return { _status: 400, error: "name and content are required" };
     return fn.writeMemory({ name, content, memoryMap: config.memoryMap, writeText: provider.writeText });
   });
 
   // Hook event ingestion (thin-client hook scripts POST here)
   route("POST", "/memory/observe", async (req) => {
     const body = await readBody(req);
-    const event = JSON.parse(body);
+    const parsed = parseJson(body, "body");
+    if (!parsed.ok) return { _status: parsed._status, error: parsed.error };
+    const event = parsed.data;
     const hookType = event.hookType || "unknown";
 
     // For session_start and pre_compact, optionally inject memory context
@@ -152,6 +166,14 @@ function readBody(req) {
     req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
     req.on("error", reject);
   });
+}
+
+function parseJson(body, label) {
+  try {
+    return { ok: true, data: JSON.parse(body) };
+  } catch (e) {
+    return { ok: false, _status: 400, error: `Invalid JSON${label ? ` in ${label}` : ""}: ${e.message}` };
+  }
 }
 
 module.exports = { registerRoutes };
