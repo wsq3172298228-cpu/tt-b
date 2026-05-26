@@ -36,6 +36,7 @@ function createMcpHandler({ provider, config, searchIndexData }) {
     { name: "tt-b_memory_write", description: "Write or update a memory file.", inputSchema: { type: "object", properties: { name: { type: "string" }, content: { type: "string" } }, required: ["name", "content"], additionalProperties: false } },
     { name: "tt-b_memory_diff", description: "Diff a memory file against old content.", inputSchema: { type: "object", properties: { name: { type: "string" }, oldContent: { type: "string" } }, required: ["name", "oldContent"], additionalProperties: false } },
     { name: "tt-b_memory_restore", description: "Restore memory from a snapshot.", inputSchema: { type: "object", properties: { snapshot: { type: "object" } }, required: ["snapshot"], additionalProperties: false } },
+    { name: "tt-b_memory_subgraph", description: "Get dependency subgraph for a node. Returns upstream/downstream dependencies within N hops in LLM-friendly text. Avoids micro-level node traversal.", inputSchema: { type: "object", properties: { entity: { type: "string", description: "Target node name (e.g., importer, Module:importer)" }, depth: { type: "number", description: "Max hops (1-5, default 3)" }, direction: { type: "string", enum: ["upstream", "downstream", "both"], description: "Exploration direction (default both)" } }, required: ["entity"], additionalProperties: false } },
   ];
 
   function handleToolCall(name, args) {
@@ -82,6 +83,10 @@ function createMcpHandler({ provider, config, searchIndexData }) {
         return wrap(fn.diffMemory({ name: args.name, oldContent: args.oldContent, memoryMap: config.memoryMap, readText: provider.readText }));
       case "tt-b_memory_restore":
         return wrap(fn.restoreMemory({ snapshot: args.snapshot, memoryMap: config.memoryMap, writeText: provider.writeText }));
+      case "tt-b_memory_subgraph": {
+        const content = provider.readText(config.memoryMap.knowledgeGraph);
+        return wrap(fn.subgraphQuery({ content, entity: args.entity, depth: args.depth, direction: args.direction }));
+      }
       default:
         return err("Unknown tool: " + name);
     }

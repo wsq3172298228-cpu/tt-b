@@ -131,6 +131,19 @@ When recovering context:
    - Record verification results.
    - Update the execution cursor.
 
+## Memory Backup and Iteration
+
+For complex tasks that modify knowledge-graph.md or session-state.md:
+
+1. **Backup first**: Before iterating on memory files, copy the current version to a timestamped backup.
+   - `knowledge-graph.md` → `knowledge-graph.backup.YYYY-MM-DD.md`
+   - `session-state.md` → `session-state.backup.YYYY-MM-DD.md`
+2. **Then iterate**: Make incremental updates to the original files.
+3. **Rollback if needed**: If the iteration goes wrong, restore from backup.
+4. **Clean up**: After the task succeeds, delete backup files that are no longer needed.
+
+This prevents accumulated errors from iterative memory updates and provides a clean rollback path.
+
 ## Knowledge Graph Thinking
 
 Think in graph form:

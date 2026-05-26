@@ -135,6 +135,7 @@ node bin/import-agent-workflow.js /path/to/target-project
 - `opencode.json` - OpenCode 指令文件注册
 - `.claude/bin/model-preflight.js` - 宿主/模型/能力检测器
 - `.claude/bin/memory-reminder.js` - 非阻塞记忆提醒钩子辅助脚本
+- `.claude/bin/memory-compress.js` - 上下文压缩时自动压缩记忆
 - `.claude/bin/tt-b-mcp-server.js` - MCP 服务器，暴露记忆资源和工具
 - `.claude/bin/tt-b-rest-server.js` - REST API 服务器，用于 HTTP 集成
 - `.claude/bin/tt-b-lifecycle.js` - 完整生命周期引导，包含 8 个阶段（配置、提供者、记忆函数、REST、MCP、查看器、健康检查、搜索索引）
@@ -268,7 +269,7 @@ node bin/tt-b-openclaw-install.js
 }
 ```
 
-暴露 4 个资源（记忆文件、契约）和 11 个工具（CRUD、搜索、快照、验证、图谱提取）。适用于 Cursor、Windsurf、Continue、Cline 及任何 MCP 兼容客户端。
+暴露 4 个资源（记忆文件、契约）和 12 个工具（CRUD、搜索、快照、验证、图谱提取、子图查询）。适用于 Cursor、Windsurf、Continue、Cline 及任何 MCP 兼容客户端。
 
 ### 验证安装
 
@@ -312,7 +313,8 @@ tt-b/
 │   ├── verify-memory.js          # 过时/占位符检查
 │   ├── health-check.js           # 内置健康检查
 │   ├── extract-nodes.js          # 知识图谱节点提取
-│   └── extract-edges.js          # 知识图谱边提取
+│   ├── extract-edges.js          # 知识图谱边提取
+│   └── subgraph-query.js         # 宏观聚合子图查询（BFS）
 ├── packages/
 │   ├── plugin/                   # Claude/Codex 用户体验层
 │   │   ├── index.js
@@ -334,6 +336,12 @@ tt-b/
 │   │   └── hooks.codex.json      # Codex 钩子（6 种）
 │   ├── scripts/                  # 薄客户端钩子脚本（.mjs）
 │   └── skills/                   # 用户可调用技能（SKILL.md）
+├── .claude/bin/
+│   ├── model-preflight.js
+│   ├── memory-reminder.js
+│   ├── memory-compress.js
+│   ├── graph-updater.js          # Diff 驱动的增量图谱守护进程
+│   └── post-commit-hook.js       # 轻量级 git post-commit 钩子
 ├── .claude-plugin/marketplace.json
 ├── .codex-plugin/marketplace.json
 └── templates/                    # 干净的导入模板
@@ -353,8 +361,11 @@ tt-b/
 - `CLAUDE.md` - 项目级启动和推理契约
 - `.claude/bin/model-preflight.js` - 最佳努力宿主/模型/能力检测辅助脚本
 - `.claude/bin/memory-reminder.js` - 非阻塞钩子辅助脚本，提醒智能体查阅和更新记忆
+- `.claude/bin/memory-compress.js` - 上下文压缩时自动压缩 knowledge-graph.md
+- `.claude/bin/graph-updater.js` - Diff 驱动的增量知识图谱守护进程（`--once`、`--watch`、`--dry-run`）
+- `.claude/bin/post-commit-hook.js` - 轻量级 git post-commit 钩子，将提交排队用于异步图谱更新
 - `.claude/settings.json` - Claude Code 钩子注册，用于启动、恢复、压缩和重要提示提醒
-- `functions/` - 15 个细粒度记忆能力模块（提供者、CRUD、搜索、快照、差异、验证、健康检查、图谱提取）
+- `functions/` - 16 个细粒度记忆能力模块（提供者、CRUD、搜索、快照、差异、验证、健康检查、图谱提取、子图查询）
 - `packages/plugin/` - Claude/Codex 用户体验（钩子、预检、受管理区块）
 - `packages/integrations/` - 水平适配器（REST、MCP、OpenCode、查看器）
 - `bin/tt-b-lifecycle.js` - 8 阶段引导编排器，使用 functions/ 和 packages/
@@ -366,6 +377,39 @@ tt-b/
 - `.claude-plugin/` - Claude Code 市场清单
 - `.codex-plugin/` - Codex 市场清单
 - `templates/` - 新目标项目的干净导入模板
+
+## 图谱优化
+
+通过两个机制保持知识图谱的实时性和可查询性，且不阻塞开发流程：
+
+### 增量更新（Diff 驱动）
+
+图谱通过轻量级异步管道与代码保持同步：
+
+1. **post-commit 钩子**（`.claude/bin/post-commit-hook.js`）— 每次 `git commit` 时，将 commit hash 写入 `.git/graph_update_queue` 后立即退出（不阻塞）。
+2. **图谱更新守护进程**（`.claude/bin/graph-updater.js`）— 消费队列，解析 `git diff`，通过本地启发式提取变更的实体/关系，增量修补 `knowledge-graph.md`。
+
+```bash
+# 安装 post-commit 钩子（一次性）
+cp .claude/bin/post-commit-hook.js .git/hooks/post-commit && chmod +x .git/hooks/post-commit
+
+# 运行守护进程（三选一）
+node .claude/bin/graph-updater.js --once      # 处理队列一次后退出
+node .claude/bin/graph-updater.js --watch     # 每 30 秒轮询
+node .claude/bin/graph-updater.js --dry-run   # 预览变更但不写入
+```
+
+### 宏观聚合查询（子图）
+
+`tt-b_memory_subgraph` MCP 工具在单次调用中完成多跳 BFS 遍历，返回 LLM 友好的结构化文本，避免逐节点遍历导致的工具调用死循环：
+
+```
+entity: AuthService
+depth: 3
+direction: both
+```
+
+返回格式化的树状结构，展示 3 跳内的上下游依赖，已过滤为业务相关节点。
 
 ## 通用智能体集成
 
@@ -381,8 +425,8 @@ tt-b/
 1. 将工作流安装到目标项目。
 2. 让智能体加载 `CLAUDE.md` 或 `AGENTS.md` 作为指令源。
 3. 让智能体在执行非简单任务前读取 `.claude/memory/knowledge-graph.md` 和 `.claude/memory/session-state.md`。
-4. 可选：调用 `.claude/bin/model-preflight.js` 分类宿主、模型和执行模式。
-5. 可选：从钩子、MCP 或 REST 调用 `.claude/bin/memory-reminder.js` 注入非阻塞记忆提醒。
+4. 调用 `.claude/bin/model-preflight.js` 分类宿主、模型和执行模式。
+5. 从钩子、MCP 或 REST 调用 `.claude/bin/memory-reminder.js` 注入非阻塞记忆提醒。
 6. 在有意义的验证工作后，更新记忆文件中的稳定事实和当前执行游标。
 
 这意味着项目可以教授一个可移植的智能体工作流，同时让每个运行时选择自己的集成表面。
@@ -487,6 +531,7 @@ MCP 服务器使用 MCP JSON-RPC 2.0 协议通过 stdio 通信。
 | `tt-b_memory_verify` | 验证记忆文件的过时和占位符 |
 | `tt-b_memory_nodes` | 提取所有知识图谱节点 |
 | `tt-b_memory_edges` | 提取所有知识图谱边 |
+| `tt-b_memory_subgraph` | 获取依赖子图（上下游 N 跳，LLM 友好文本格式） |
 
 与 Claude Code 或任何 MCP 客户端一起使用：
 
@@ -600,6 +645,61 @@ node .claude/bin/tt-b-lifecycle.js
 
 提醒是有意设计为软性的。不会阻塞提示，简单提示可以忽略它。
 
+## 记忆自动压缩
+
+导入的项目包含自动压缩钩子，当 Claude Code 触发上下文压缩事件时运行。该钩子：
+
+1. 检查 `knowledge-graph.md` 是否超过 600 行。
+2. 创建带时间戳的备份（如 `knowledge-graph.backup.2026-05-26.md`）。
+3. 去除重复边、折叠空段落、归档冷区边块进行压缩。
+4. 注入压缩报告作为咨询上下文。
+
+备份确保压缩丢失重要细节时可以回滚。
+
+配置：钩子注册在 `.claude/settings.json` 的 `SessionStart` 中，使用 `compact` 匹配器。压缩脚本位于 `.claude/bin/memory-compress.js`。
+
+## 图谱增量更新（Git 钩子）
+
+项目包含一个基于 diff 的图谱更新器，保持知识图谱与代码变更同步。采用两部分架构：
+
+1. **post-commit 钩子**（`.claude/bin/post-commit-hook.js`）— 轻量级，运行时间 <1ms。将 commit hash 写入 `.git/graph_update_queue` 后立即退出。不阻塞 git 操作。
+
+2. **图谱更新守护进程**（`.claude/bin/graph-updater.js`）— 读取队列，使用本地启发式从 `git diff` 中提取变更实体，并带时间戳备份地修补 `knowledge-graph.md`。
+
+用法：
+
+```bash
+# 安装 git 钩子
+echo 'node .claude/bin/post-commit-hook.js' > .git/hooks/post-commit
+chmod +x .git/hooks/post-commit
+
+# 处理队列中的提交（单次执行）
+node .claude/bin/graph-updater.js --once
+
+# 作为后台守护进程运行（每 5 秒轮询）
+node .claude/bin/graph-updater.js --watch
+
+# 预览变更但不写入
+node .claude/bin/graph-updater.js --dry-run
+```
+
+## 子图查询（MCP 工具）
+
+`tt-b_memory_subgraph` MCP 工具在单次调用中提供宏观级依赖分析，避免逐节点遍历的"死循环"。
+
+```json
+{
+  "name": "tt-b_memory_subgraph",
+  "arguments": {
+    "entity": "importer",
+    "depth": 3,
+    "direction": "both"
+  }
+}
+```
+
+返回 LLM 友好的结构化文本，显示指定跳数内的上下游依赖。深度上限为 5，防止上下文爆炸。
+
 ## 模型检测
 
 辅助脚本遵循以下优先级：
@@ -649,6 +749,7 @@ node .claude/bin/model-preflight.js --host codex --model gpt-5.5
 node --check bin/import-agent-workflow.js
 node --check .claude/bin/model-preflight.js
 node --check .claude/bin/memory-reminder.js
+node --check .claude/bin/memory-compress.js
 ./.claude/bin/model-preflight.js --host codex --model gpt-5.5 --text
 ```
 

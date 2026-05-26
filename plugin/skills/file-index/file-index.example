@@ -1,0 +1,183 @@
+# File Index Configuration
+# Place this file as .fileindex in your project root
+# Syntax similar to .gitignore
+
+# ============================
+# Essential files (always read first)
+# ============================
+# Add files that are critical for understanding the project
+essential:
+  - package.json
+  - README.md
+  - CLAUDE.md
+  - Makefile
+  - docker-compose.yml
+  - src/main.py
+  - app.py
+  # Add your project-specific essential files:
+  # - config/settings.py
+  # - docs/architecture.md
+
+# ============================
+# Source directories
+# ============================
+# Directories containing core application code
+source_dirs:
+  - src
+  - lib
+  - app
+  - pkg
+  # Add your source directories:
+  # - core
+  # - services
+
+# ============================
+# Test directories
+# ============================
+test_dirs:
+  - tests
+  - test
+  - __tests__
+  - spec
+  - e2e
+
+# ============================
+# Documentation directories
+# ============================
+docs_dirs:
+  - docs
+  - doc
+  - documentation
+  - wiki
+
+# ============================
+# Asset directories
+# ============================
+asset_dirs:
+  - public
+  - static
+  - assets
+  - images
+  - fonts
+
+# ============================
+# Ignore patterns (like .gitignore)
+# ============================
+ignore:
+  # Dependencies
+  - node_modules/
+  - vendor/
+  - .venv/
+  - venv/
+  - __pycache__/
+
+  # Build output
+  - dist/
+  - build/
+  - out/
+  - .next/
+  - target/
+
+  # Temporary files
+  - *.log
+  - *.tmp
+  - *.temp
+  - .cache/
+  - tmp/
+
+  # IDE/Editor
+  - .idea/
+  - .vscode/
+  - *.swp
+  - *.swo
+  - *~
+
+  # OS files
+  - .DS_Store
+  - Thumbs.db
+
+  # Add your custom ignores:
+  # - coverage/
+  # - .env.local
+  # - *.pyc
+
+# ============================
+# Custom categories
+# ============================
+# Define your own categories
+custom_categories:
+  # Example: API routes
+  api:
+    description: "API route handlers"
+    dirs:
+      - api
+      - routes
+      - controllers
+    extensions:
+      - .js
+      - .ts
+      - .py
+
+  # Example: Database models
+  models:
+    description: "Database models and schemas"
+    dirs:
+      - models
+      - schemas
+      - entities
+    extensions:
+      - .js
+      - .ts
+      - .py
+
+  # Example: Middleware
+  middleware:
+    description: "Middleware functions"
+    dirs:
+      - middleware
+      - interceptors
+    extensions:
+      - .js
+      - .ts
+
+  # Example: Styles
+  styles:
+    description: "CSS and styling files"
+    dirs:
+      - styles
+      - css
+      - scss
+    extensions:
+      - .css
+      - .scss
+      - .sass
+      - .less
+
+# ============================
+# File descriptions
+# ============================
+# Add descriptions for important files
+file_descriptions:
+  package.json: "Dependencies and scripts"
+  README.md: "Project documentation"
+  Makefile: "Build automation"
+  Dockerfile: "Container configuration"
+  # Add your file descriptions:
+  # config/settings.py: "Application settings"
+  # docs/api.md: "API documentation"
+
+# ============================
+# Scan options
+# ============================
+options:
+  # Maximum depth to scan (default: 10)
+  max_depth: 10
+
+  # Follow symlinks (default: false)
+  follow_symlinks: false
+
+  # Include hidden files (default: false)
+  include_hidden: false
+
+  # Max files per category in output (default: 50)
+  max_files_per_category: 50

@@ -43,6 +43,7 @@ It creates or updates:
 - `opencode.json` - OpenCode instruction file registration
 - `.claude/bin/model-preflight.js` - host/model/capability detector
 - `.claude/bin/memory-reminder.js` - non-blocking memory reminder hook helper
+- `.claude/bin/memory-compress.js` - auto-compress memory on context compaction
 - `.claude/bin/tt-b-mcp-server.js` - MCP server exposing memory resources and tools
 - `.claude/bin/tt-b-rest-server.js` - REST API server for HTTP-based integration
 - `.claude/bin/tt-b-lifecycle.js` - Full lifecycle bootstrap with 8 phases (config, provider, memory functions, REST, MCP, viewer, health, search index)
@@ -179,7 +180,7 @@ Add this to your tool's MCP server config:
 }
 ```
 
-Exposes 4 resources (memory files, contracts) and 11 tools (CRUD, search, snapshot, verify, graph extraction). Works with Cursor, Windsurf, Continue, Cline, and any MCP-compatible client.
+Exposes 4 resources (memory files, contracts) and 12 tools (CRUD, search, snapshot, verify, graph extraction, subgraph query). Works with Cursor, Windsurf, Continue, Cline, and any MCP-compatible client.
 
 ### Verify installation
 
@@ -223,7 +224,8 @@ tt-b/
 │   ├── verify-memory.js          # staleness/placeholder checks
 │   ├── health-check.js           # built-in health checks
 │   ├── extract-nodes.js          # knowledge graph node extraction
-│   └── extract-edges.js          # knowledge graph edge extraction
+│   ├── extract-edges.js          # knowledge graph edge extraction
+│   └── subgraph-query.js         # macro aggregation subgraph query (BFS)
 ├── packages/
 │   ├── plugin/                   # Claude/Codex UX layer
 │   │   ├── index.js
@@ -245,6 +247,12 @@ tt-b/
 │   │   └── hooks.codex.json      # Codex hooks (6 types)
 │   ├── scripts/                  # Thin-client hook scripts (.mjs)
 │   └── skills/                   # User-invocable skills (SKILL.md)
+├── .claude/bin/
+│   ├── model-preflight.js
+│   ├── memory-reminder.js
+│   ├── memory-compress.js
+│   ├── graph-updater.js          # diff-driven incremental graph daemon
+│   └── post-commit-hook.js       # lightweight git post-commit hook
 ├── .claude-plugin/marketplace.json
 ├── .codex-plugin/marketplace.json
 └── templates/                    # Clean import templates
@@ -264,8 +272,11 @@ tt-b/
 - `CLAUDE.md` - project-level startup and reasoning contract
 - `.claude/bin/model-preflight.js` - best-effort host/model/capability detection helper
 - `.claude/bin/memory-reminder.js` - non-blocking hook helper that reminds agents to consult and update memory
+- `.claude/bin/memory-compress.js` - auto-compress knowledge-graph.md when context compaction triggers
+- `.claude/bin/graph-updater.js` - diff-driven incremental knowledge graph daemon (`--once`, `--watch`, `--dry-run`)
+- `.claude/bin/post-commit-hook.js` - lightweight git post-commit hook that queues commits for async graph updates
 - `.claude/settings.json` - Claude Code hook registration for startup, resume, compaction, and substantial prompt reminders
-- `functions/` - 15 fine-grained memory capability modules (provider, CRUD, search, snapshot, diff, verify, health, graph extraction)
+- `functions/` - 16 fine-grained memory capability modules (provider, CRUD, search, snapshot, diff, verify, health, graph extraction, subgraph query)
 - `packages/plugin/` - Claude/Codex UX (hooks, preflight, managed blocks)
 - `packages/integrations/` - horizontal adapters (REST, MCP, OpenCode, viewer)
 - `bin/tt-b-lifecycle.js` - 8-phase bootstrap orchestrator using functions/ and packages/
@@ -277,6 +288,39 @@ tt-b/
 - `.claude-plugin/` - Claude Code marketplace manifest
 - `.codex-plugin/` - Codex marketplace manifest
 - `templates/` - clean import templates for new target projects
+
+## Graph Optimization
+
+Two mechanisms keep the knowledge graph fresh and queryable without blocking development:
+
+### Incremental Updates (Diff-Driven)
+
+The graph stays in sync with code through a lightweight async pipeline:
+
+1. **post-commit hook** (`.claude/bin/post-commit-hook.js`) — on every `git commit`, writes the commit hash to `.git/graph_update_queue` and exits immediately (no blocking).
+2. **graph updater daemon** (`.claude/bin/graph-updater.js`) — consumes the queue, parses `git diff`, extracts changed entities/relations via local heuristics, and patches `knowledge-graph.md` incrementally.
+
+```bash
+# install the post-commit hook (one-time)
+cp .claude/bin/post-commit-hook.js .git/hooks/post-commit && chmod +x .git/hooks/post-commit
+
+# run the daemon (pick one)
+node .claude/bin/graph-updater.js --once      # process queue once and exit
+node .claude/bin/graph-updater.js --watch     # poll every 30s
+node .claude/bin/graph-updater.js --dry-run   # preview changes without writing
+```
+
+### Macro Aggregation Query (Subgraph)
+
+Instead of forcing the LLM to traverse nodes one-by-one (causing tool-call loops), the `tt-b_memory_subgraph` MCP tool does multi-hop BFS in a single call and returns LLM-friendly structured text:
+
+```
+entity: AuthService
+depth: 3
+direction: both
+```
+
+Returns a formatted tree showing upstream/downstream dependencies across 3 hops, filtered to business-relevant nodes.
 
 ## Universal Agent Integration
 
@@ -410,6 +454,7 @@ Tools:
 | `tt-b_memory_verify` | Verify memory files for staleness and placeholders |
 | `tt-b_memory_nodes` | Extract all knowledge graph nodes |
 | `tt-b_memory_edges` | Extract all knowledge graph edges |
+| `tt-b_memory_subgraph` | Get dependency subgraph (upstream/downstream N hops, LLM-friendly text) |
 
 Usage with Claude Code or any MCP client:
 
@@ -529,6 +574,72 @@ advisory context reminding the agent to:
 The reminder is intentionally soft. It does not block prompts, and trivial
 prompts can ignore it.
 
+## Memory auto-compression
+
+Imported projects include an auto-compression hook that runs when Claude Code
+triggers a context compaction event. The hook:
+
+1. Checks if `knowledge-graph.md` exceeds 600 lines.
+2. Creates a timestamped backup (e.g., `knowledge-graph.backup.2026-05-26.md`).
+3. Compresses by removing duplicate edges, collapsing empty sections, and
+   archiving stale edge blocks.
+4. Injects a compression report as advisory context.
+
+The backup ensures rollback is possible if compression loses important detail.
+
+Configuration: the hook is registered in `.claude/settings.json` under
+`SessionStart` with the `compact` matcher. The compression script is at
+`.claude/bin/memory-compress.js`.
+
+## Incremental graph updates (Git hook)
+
+The project includes a diff-driven graph updater that keeps the knowledge graph
+in sync with code changes. It uses a two-part architecture:
+
+1. **Post-commit hook** (`.claude/bin/post-commit-hook.js`) — lightweight, runs
+   in <1ms. Writes the commit hash to `.git/graph_update_queue` and exits
+   immediately. Does not block git operations.
+
+2. **Graph updater daemon** (`.claude/bin/graph-updater.js`) — reads the queue,
+   extracts changed entities from `git diff` using local heuristics, and patches
+   `knowledge-graph.md` with a timestamped backup.
+
+Usage:
+
+```bash
+# Install the git hook
+echo 'node .claude/bin/post-commit-hook.js' > .git/hooks/post-commit
+chmod +x .git/hooks/post-commit
+
+# Process queued commits (one-shot)
+node .claude/bin/graph-updater.js --once
+
+# Run as background daemon (polls every 5s)
+node .claude/bin/graph-updater.js --watch
+
+# Preview changes without writing
+node .claude/bin/graph-updater.js --dry-run
+```
+
+## Subgraph query (MCP tool)
+
+The `tt-b_memory_subgraph` MCP tool provides macro-level dependency analysis in
+a single call, avoiding the "infinite loop" of micro-level node traversal.
+
+```json
+{
+  "name": "tt-b_memory_subgraph",
+  "arguments": {
+    "entity": "importer",
+    "depth": 3,
+    "direction": "both"
+  }
+}
+```
+
+Returns LLM-friendly structured text showing upstream/downstream dependencies
+within the specified hop depth. Depth is capped at 5 to prevent context explosion.
+
 ## Model detection
 
 The helper follows this precedence:
@@ -579,6 +690,7 @@ The importer and helper can still be checked locally:
 node --check bin/import-agent-workflow.js
 node --check .claude/bin/model-preflight.js
 node --check .claude/bin/memory-reminder.js
+node --check .claude/bin/memory-compress.js
 ./.claude/bin/model-preflight.js --host codex --model gpt-5.5 --text
 ```
 

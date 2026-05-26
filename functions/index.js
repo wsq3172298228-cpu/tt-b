@@ -35,4 +35,5 @@ module.exports = {
   // Knowledge graph
   extractNodes: require("./extract-nodes"),
   extractEdges: require("./extract-edges"),
+  subgraphQuery: require("./subgraph-query"),
 };
