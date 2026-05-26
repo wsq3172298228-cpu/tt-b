@@ -31,6 +31,9 @@ const MEMORY_REMINDER_PATTERN = "memory-reminder.js";
 const TT_B_SCRIPTS = [
   ".claude/bin/model-preflight.js",
   ".claude/bin/memory-reminder.js",
+  ".claude/bin/memory-compress.js",
+  ".claude/bin/graph-updater.js",
+  ".claude/bin/post-commit-hook.js",
   ".claude/bin/tt-b-mcp-server.js",
   ".claude/bin/tt-b-rest-server.js",
   ".claude/bin/tt-b-lifecycle.js",
@@ -47,6 +50,9 @@ const TT_B_DIRS = [
 const TT_B_MEMORY_FILES = [
   ".claude/memory/knowledge-graph.md",
   ".claude/memory/session-state.md",
+  ".claude/memory/graph_memory.db",
+  ".claude/memory/graph_memory.db-wal",
+  ".claude/memory/graph_memory.db-shm",
 ];
 
 const TT_B_LEGACY_FILES = [
@@ -281,18 +287,23 @@ function cleanup(options) {
       continue;
     }
 
-    const content = readText(fullPath);
-    const isTemplate = content && (
-      content.includes("not initialized") ||
-      content.includes("none recorded") ||
-      content.includes("unknown")
-    );
+    const isBinary = relPath.endsWith(".db") || relPath.endsWith(".db-wal") || relPath.endsWith(".db-shm");
+    let isTemplate = false;
 
-    if (isTemplate || options.force) {
+    if (!isBinary) {
+      const content = readText(fullPath);
+      isTemplate = content && (
+        content.includes("not initialized") ||
+        content.includes("none recorded") ||
+        content.includes("unknown")
+      );
+    }
+
+    if (isTemplate || isBinary || options.force) {
       if (!options.dryRun) {
         fs.unlinkSync(fullPath);
       }
-      addAction("removed", relPath, isTemplate ? "template content" : "forced");
+      addAction("removed", relPath, isBinary ? "graph database" : isTemplate ? "template content" : "forced");
     } else {
       addAction("kept", relPath, "contains project data (use --force to remove)");
     }

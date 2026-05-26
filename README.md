@@ -85,8 +85,8 @@ node bin/tt-b-cleanup.js /path/to/target-project
 This removes:
 
 - Managed blocks from `CLAUDE.md` and `AGENTS.md` (preserves existing content)
-- Helper scripts in `.claude/bin/`
-- Memory templates in `.claude/memory/`
+- Helper scripts in `.claude/bin/` (including graph-updater, post-commit-hook)
+- Memory templates and graph database in `.claude/memory/` (graph_memory.db)
 - Legacy pointer files in `.claude/`
 - Hook entries from `.claude/settings.json` (preserves other settings)
 - Instruction entries from `opencode.json` (preserves other config)

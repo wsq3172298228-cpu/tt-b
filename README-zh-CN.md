@@ -174,8 +174,8 @@ node bin/tt-b-cleanup.js /path/to/target-project
 移除内容：
 
 - `CLAUDE.md` 和 `AGENTS.md` 中的受管理区块（保留已有内容）
-- `.claude/bin/` 中的辅助脚本
-- `.claude/memory/` 中的记忆模板
+- `.claude/bin/` 中的辅助脚本（含 graph-updater、post-commit-hook 等）
+- `.claude/memory/` 中的记忆模板和图谱数据库（graph_memory.db）
 - `.claude/` 中的兼容性指针文件
 - `.claude/settings.json` 中的钩子条目（保留其他设置）
 - `opencode.json` 中的指令条目（保留其他配置）
