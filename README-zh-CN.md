@@ -139,6 +139,9 @@ node bin/import-agent-workflow.js /path/to/target-project
 - `.claude/bin/tt-b-mcp-server.js` - MCP 服务器，暴露记忆资源和工具
 - `.claude/bin/tt-b-rest-server.js` - REST API 服务器，用于 HTTP 集成
 - `.claude/bin/tt-b-lifecycle.js` - 完整生命周期引导，包含 8 个阶段（配置、提供者、记忆函数、REST、MCP、查看器、健康检查、搜索索引）
+- `.claude/bin/graph-updater.js` - Diff 驱动的增量知识图谱守护进程（`--once`、`--watch`、`--gc`、`--verify`）
+- `.claude/bin/post-commit-hook.js` - 轻量级 git post-commit 钩子，将提交排队用于异步图谱更新
+- `.claude/functions/` - 16 个细粒度记忆能力模块（含 `graph-store.js` SQLite 存储层和 `subgraph-query.js` 子图查询）
 - `.claude/settings.json` - Claude Code 钩子注册，用于记忆提醒
 - `.claude/memory/knowledge-graph.md` - 干净的长期记忆模板
 - `.claude/memory/session-state.md` - 干净的当前任务状态模板
@@ -146,6 +149,12 @@ node bin/import-agent-workflow.js /path/to/target-project
 - `.claude/session-state.md` - 兼容性指针文件
 
 已有的 `CLAUDE.md` 和 `AGENTS.md` 内容会被保留。导入器仅追加或替换受管理的 `tt-b` 区块。已有的记忆文件会被保留，除非使用 `--force`。
+
+如果目标项目有 `package.json`，导入器会自动安装 `better-sqlite3` 依赖。图谱增量更新需要手动安装 git 钩子：
+
+```bash
+cp .claude/bin/post-commit-hook.js .git/hooks/post-commit && chmod +x .git/hooks/post-commit
+```
 
 常用选项：
 
@@ -226,7 +235,7 @@ node bin/claude-global-deploy.js
 ### Codex CLI
 
 ```bash
-# 为 Codex 安装 tt-b 插件（6 钩子、11 MCP 工具、10 技能）
+# 为 Codex 安装 tt-b 插件（6 钩子、12 MCP 工具、10 技能）
 node bin/tt-b-codex-install.js
 ```
 

@@ -47,6 +47,9 @@ It creates or updates:
 - `.claude/bin/tt-b-mcp-server.js` - MCP server exposing memory resources and tools
 - `.claude/bin/tt-b-rest-server.js` - REST API server for HTTP-based integration
 - `.claude/bin/tt-b-lifecycle.js` - Full lifecycle bootstrap with 8 phases (config, provider, memory functions, REST, MCP, viewer, health, search index)
+- `.claude/bin/graph-updater.js` - diff-driven incremental knowledge graph daemon (`--once`, `--watch`, `--gc`, `--verify`)
+- `.claude/bin/post-commit-hook.js` - lightweight git post-commit hook that queues commits for async graph updates
+- `.claude/functions/` - 16 fine-grained memory modules (including `graph-store.js` SQLite storage and `subgraph-query.js` BFS query)
 - `.claude/settings.json` - Claude Code hook registration for memory reminders
 - `.claude/memory/knowledge-graph.md` - clean long-term memory template
 - `.claude/memory/session-state.md` - clean current-task state template
@@ -56,6 +59,13 @@ It creates or updates:
 Existing `CLAUDE.md` and `AGENTS.md` content is preserved. The importer appends
 or replaces only the managed `tt-b` block. Existing memory files are preserved
 unless `--force` is used.
+
+If the target project has a `package.json`, the importer auto-installs `better-sqlite3`.
+For incremental graph updates, install the git hook manually:
+
+```bash
+cp .claude/bin/post-commit-hook.js .git/hooks/post-commit && chmod +x .git/hooks/post-commit
+```
 
 Useful options:
 
@@ -137,7 +147,7 @@ Options: `--dry-run`, `--restore`, `--delete`, `--verify`, `--list-backups`.
 ### Codex CLI
 
 ```bash
-# install tt-b plugin for Codex (6 hooks, 11 MCP tools, 10 skills)
+# install tt-b plugin for Codex (6 hooks, 12 MCP tools, 10 skills)
 node bin/tt-b-codex-install.js
 ```
 
