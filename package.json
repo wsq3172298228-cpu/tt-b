@@ -50,5 +50,8 @@
   "license": "UNLICENSED",
   "engines": {
     "node": ">=18"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.10.0"
   }
 }

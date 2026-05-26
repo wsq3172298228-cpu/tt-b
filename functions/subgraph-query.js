@@ -146,15 +146,14 @@ function subgraphQuery({ content, entity, depth, direction, projectRoot }) {
   const safeDepth = Math.min(Math.max(parseInt(depth) || DEFAULT_DEPTH, 1), MAX_DEPTH);
   const safeDirection = direction || "both";
 
-  // Try loading from JSON via graph-store first
+  // Try loading from SQLite via graph-store first
   let edges, allNodes;
   if (projectRoot) {
     try {
       const createGraphStore = require("./graph-store");
       const store = createGraphStore({ projectRoot });
       const graph = store.load();
-      if (graph.source === "json" && graph.edges.length > 0) {
-        // Convert JSON edges to extract-edges format
+      if ((graph.source === "sqlite" || graph.source === "markdown-import") && graph.edges.length > 0) {
         edges = graph.edges.map(e => ({
           from: { type: e.from.type, name: e.from.name },
           relation: e.relation,
@@ -162,6 +161,7 @@ function subgraphQuery({ content, entity, depth, direction, projectRoot }) {
         }));
         allNodes = Object.values(graph.nodes).map(n => ({ type: n.type, name: n.name }));
       }
+      store.close();
     } catch (e) {
       // Fall through to markdown parsing
     }

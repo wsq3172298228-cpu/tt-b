@@ -208,120 +208,6 @@ function applyPatch(content, patch) {
   return { content: lines.join("\n"), changed: true };
 }
 
-/**
- * Garbage collect stale nodes from the graph.
- *
- * A node is "stale" if:
- * - It's a File node and the file no longer exists on disk
- * - It's a Symbol node and its parent file no longer exists
- * - It was explicitly removed in a patch
- *
- * Stale nodes are marked with `staleSince` timestamp. After STALE_THRESHOLD
- * commits with the node still stale, it gets removed along with its edges.
- *
- * @param {object} graph — graph from graph-store
- * @param {string} projectRoot — project root for file existence checks
- * @param {object} patch — current patch with removed/deletedFiles
- * @returns {{ graph, removed: string[], marked: string[] }}
- */
-function gcStaleNodes(graph, projectRoot, patch) {
-  const removed = [];
-  const marked = [];
-  const now = new Date().toISOString();
-
-  // Phase 1: Mark nodes from deleted files as stale
-  if (patch && patch.deletedFiles) {
-    for (const filePath of patch.deletedFiles) {
-      const fileName = path.basename(filePath, path.extname(filePath));
-      const fileKey = `File:${fileName}`;
-
-      if (graph.nodes[fileKey] && !graph.nodes[fileKey].metadata.staleSince) {
-        graph.nodes[fileKey].metadata.staleSince = now;
-        graph.nodes[fileKey].metadata.staleReason = `file deleted: ${filePath}`;
-        marked.push(fileKey);
-      }
-    }
-  }
-
-  // Phase 2: Mark explicitly removed nodes as stale
-  if (patch && patch.removed) {
-    for (const node of patch.removed) {
-      const key = `${node.type}:${node.name}`;
-      if (graph.nodes[key] && !graph.nodes[key].metadata.staleSince) {
-        graph.nodes[key].metadata.staleSince = now;
-        graph.nodes[key].metadata.staleReason = `removed in patch`;
-        marked.push(key);
-      }
-    }
-  }
-
-  // Phase 3: Scan all File nodes — mark stale if file doesn't exist
-  for (const [key, node] of Object.entries(graph.nodes)) {
-    if (node.type === "File" && node.metadata.path) {
-      const fullPath = path.join(projectRoot, node.metadata.path);
-      if (!fs.existsSync(fullPath) && !node.metadata.staleSince) {
-        node.metadata.staleSince = now;
-        node.metadata.staleReason = `file not found: ${node.metadata.path}`;
-        marked.push(key);
-      }
-    }
-  }
-
-  // Phase 4: Remove nodes that have been stale for >= STALE_THRESHOLD commits
-  const commitCount = (graph.commits || []).length;
-  for (const [key, node] of Object.entries(graph.nodes)) {
-    if (node.metadata.staleSince) {
-      // Count commits since stale marking
-      const staleIdx = graph.commits.findIndex(c => c.timestamp >= node.metadata.staleSince);
-      const commitsSinceStale = staleIdx >= 0 ? commitCount - staleIdx : STALE_THRESHOLD;
-
-      if (commitsSinceStale >= STALE_THRESHOLD) {
-        // Remove node
-        delete graph.nodes[key];
-        removed.push(key);
-
-        // Remove edges involving this node
-        const beforeEdges = graph.edges.length;
-        graph.edges = graph.edges.filter(
-          e => `${e.from.type}:${e.from.name}` !== key && `${e.to.type}:${e.to.name}` !== key
-        );
-        const removedEdges = beforeEdges - graph.edges.length;
-        if (removedEdges > 0) {
-          removed.push(`  └─ ${removedEdges} edges`);
-        }
-      }
-    }
-  }
-
-  return { graph, removed, marked };
-}
-
-/**
- * Verify graph consistency against filesystem.
- * Returns { orphanNodes, missingFiles, danglingEdges }
- */
-function verifyGraph(graph, projectRoot) {
-  const orphanNodes = [];
-  const missingFiles = [];
-
-  for (const [key, node] of Object.entries(graph.nodes)) {
-    if (node.type === "File" && node.metadata.path) {
-      const fullPath = path.join(projectRoot, node.metadata.path);
-      if (!fs.existsSync(fullPath)) {
-        missingFiles.push({ key, path: node.metadata.path });
-      }
-    }
-  }
-
-  // Check for edges referencing non-existent nodes
-  const nodeKeys = new Set(Object.keys(graph.nodes));
-  const danglingEdges = graph.edges.filter(
-    e => !nodeKeys.has(`${e.from.type}:${e.from.name}`) || !nodeKeys.has(`${e.to.type}:${e.to.name}`)
-  );
-
-  return { orphanNodes, missingFiles, danglingEdges };
-}
-
 function main() {
   const args = process.argv.slice(2);
   const isOnce = args.includes("--once");
@@ -341,20 +227,22 @@ function main() {
       console.error("[graph-updater] graph-store not available");
       process.exit(1);
     }
-    const graph = store.load();
-    const result = verifyGraph(graph, root);
-    console.log(`[verify] Nodes: ${Object.keys(graph.nodes).length}, Edges: ${graph.edges.length}`);
+    store.load(); // init DB
+    const s = store.stats();
+    const result = store.verify();
+    console.log(`[verify] Nodes: ${s.nodeCount}, Edges: ${s.edgeCount}, Stale: ${s.staleCount}`);
     console.log(`[verify] Missing files: ${result.missingFiles.length}`);
     for (const mf of result.missingFiles) {
-      console.log(`  - ${mf.key} → ${mf.path}`);
+      console.log(`  - ${mf.id} → ${mf.file_path}`);
     }
     console.log(`[verify] Dangling edges: ${result.danglingEdges.length}`);
     for (const de of result.danglingEdges.slice(0, 10)) {
-      console.log(`  - ${de.from.type}:${de.from.name} ${de.relation} ${de.to.type}:${de.to.name}`);
+      console.log(`  - ${de.from_type}:${de.from_name} ${de.relation} ${de.to_type}:${de.to_name}`);
     }
     if (result.missingFiles.length === 0 && result.danglingEdges.length === 0) {
       console.log("[verify] Graph is consistent.");
     }
+    store.close();
     return;
   }
 
@@ -365,10 +253,11 @@ function main() {
       console.error("[graph-updater] graph-store not available");
       process.exit(1);
     }
-    const graph = store.load();
-    console.log(`[gc] Loaded graph: ${Object.keys(graph.nodes).length} nodes, ${graph.edges.length} edges`);
+    store.load(); // init DB
+    const s = store.stats();
+    console.log(`[gc] Loaded graph: ${s.nodeCount} nodes, ${s.edgeCount} edges`);
 
-    const gcResult = gcStaleNodes(graph, root, { deletedFiles: [], removed: [] });
+    const gcResult = store.gc({ deletedFiles: [], removed: [] }, STALE_THRESHOLD);
     console.log(`[gc] Marked stale: ${gcResult.marked.length}`);
     for (const key of gcResult.marked) {
       console.log(`  - ${key}`);
@@ -379,9 +268,9 @@ function main() {
     }
 
     if (!isDryRun && (gcResult.removed.length > 0 || gcResult.marked.length > 0)) {
-      store.save(gcResult.graph);
-      console.log("[gc] Graph saved.");
+      console.log("[gc] Changes saved to SQLite.");
     }
+    store.close();
     return;
   }
 
@@ -439,7 +328,7 @@ function main() {
       fs.writeFileSync(kgPath, currentContent, "utf8");
       console.log(`[graph-updater] Updated ${KG_FILE}`);
 
-      // Dual-write to JSON via graph-store + GC
+      // Dual-write to SQLite via graph-store + GC
       const store = getGraphStore(root);
       if (store) {
         try {
@@ -447,7 +336,7 @@ function main() {
           let allDeletedFiles = [];
           let allRemoved = [];
 
-          // Apply all processed patches to JSON graph
+          // Apply all processed patches to SQLite
           for (const commitHash of processedHashes) {
             const ci = getCommitInfo(root, commitHash);
             if (!ci.error) {
@@ -459,10 +348,10 @@ function main() {
           }
 
           // Run GC after patching
-          const gcResult = gcStaleNodes(graph, root, {
+          const gcResult = store.gc({
             deletedFiles: allDeletedFiles,
             removed: allRemoved,
-          });
+          }, STALE_THRESHOLD);
           if (gcResult.marked.length > 0) {
             console.log(`[graph-updater] GC marked ${gcResult.marked.length} stale node(s)`);
           }
@@ -470,10 +359,10 @@ function main() {
             console.log(`[graph-updater] GC removed ${gcResult.removed.length} stale node(s)`);
           }
 
-          store.save(graph);
-          console.log(`[graph-updater] Updated graph_memory.json (dual-write + GC)`);
+          console.log(`[graph-updater] Updated graph_memory.db (SQLite + GC)`);
+          store.close();
         } catch (e) {
-          console.log(`[graph-updater] JSON dual-write skipped: ${e.message}`);
+          console.log(`[graph-updater] SQLite write skipped: ${e.message}`);
         }
       }
     }
