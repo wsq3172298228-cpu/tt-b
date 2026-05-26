@@ -139,18 +139,43 @@ function formatAsTree(entityName, upstreamLevels, downstreamLevels, direction) {
   return lines.join("\n");
 }
 
-function subgraphQuery({ content, entity, depth, direction }) {
-  if (!content) return "No knowledge graph content provided.";
+function subgraphQuery({ content, entity, depth, direction, projectRoot }) {
+  if (!content && !projectRoot) return "No knowledge graph content provided.";
   if (!entity) return "Entity name is required.";
 
   const safeDepth = Math.min(Math.max(parseInt(depth) || DEFAULT_DEPTH, 1), MAX_DEPTH);
   const safeDirection = direction || "both";
 
-  const edges = extractEdges({ content });
+  // Try loading from JSON via graph-store first
+  let edges, allNodes;
+  if (projectRoot) {
+    try {
+      const createGraphStore = require("./graph-store");
+      const store = createGraphStore({ projectRoot });
+      const graph = store.load();
+      if (graph.source === "json" && graph.edges.length > 0) {
+        // Convert JSON edges to extract-edges format
+        edges = graph.edges.map(e => ({
+          from: { type: e.from.type, name: e.from.name },
+          relation: e.relation,
+          to: { type: e.to.type, name: e.to.name },
+        }));
+        allNodes = Object.values(graph.nodes).map(n => ({ type: n.type, name: n.name }));
+      }
+    } catch (e) {
+      // Fall through to markdown parsing
+    }
+  }
+
+  // Fallback to markdown parsing
+  if (!edges) {
+    edges = extractEdges({ content });
+    allNodes = extractNodes({ content });
+  }
+
   const adjacency = buildAdjacencyMap(edges);
 
   // Find the target node (case-insensitive partial match)
-  const allNodes = extractNodes({ content });
   const normalizedEntity = entity.toLowerCase();
   const matchedNode = allNodes.find(n =>
     n.name.toLowerCase() === normalizedEntity ||

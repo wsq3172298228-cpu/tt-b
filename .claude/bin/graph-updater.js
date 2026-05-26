@@ -25,6 +25,20 @@ const QUEUE_FILE = ".git/graph_update_queue";
 const KG_FILE = ".claude/memory/knowledge-graph.md";
 const MAX_DIFF_LINES = 200;
 
+// Lazy-load graph-store for dual-write support
+let graphStore = null;
+function getGraphStore(root) {
+  if (!graphStore) {
+    try {
+      const createGraphStore = require("../../functions/graph-store");
+      graphStore = createGraphStore({ projectRoot: root });
+    } catch (e) {
+      // graph-store not available, fall back to markdown-only
+    }
+  }
+  return graphStore;
+}
+
 function readQueue(projectRoot) {
   const queuePath = path.join(projectRoot, QUEUE_FILE);
   if (!fs.existsSync(queuePath)) return [];
@@ -219,7 +233,7 @@ function main() {
       processedHashes.push(commitHash);
     }
 
-    // Write updated content
+    // Write updated content (dual-write: markdown + JSON)
     if (!isDryRun && currentContent !== kgContent) {
       // Backup before writing
       const backupPath = kgPath.replace(/\.md$/, `.backup.${new Date().toISOString().slice(0, 10)}.md`);
@@ -229,6 +243,26 @@ function main() {
       }
       fs.writeFileSync(kgPath, currentContent, "utf8");
       console.log(`[graph-updater] Updated ${KG_FILE}`);
+
+      // Dual-write to JSON via graph-store
+      const store = getGraphStore(root);
+      if (store) {
+        try {
+          const graph = store.load();
+          // Apply all processed patches to JSON graph
+          for (const commitHash of processedHashes) {
+            const ci = getCommitInfo(root, commitHash);
+            if (!ci.error) {
+              const p = extractPatchLocally(ci);
+              store.applyPatch(graph, p);
+            }
+          }
+          store.save(graph);
+          console.log(`[graph-updater] Updated graph_memory.json (dual-write)`);
+        } catch (e) {
+          console.log(`[graph-updater] JSON dual-write skipped: ${e.message}`);
+        }
+      }
     }
 
     // Clear processed entries from queue

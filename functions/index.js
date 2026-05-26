@@ -36,4 +36,5 @@ module.exports = {
   extractNodes: require("./extract-nodes"),
   extractEdges: require("./extract-edges"),
   subgraphQuery: require("./subgraph-query"),
+  createGraphStore: require("./graph-store"),
 };
