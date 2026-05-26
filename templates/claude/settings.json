@@ -8,6 +8,11 @@
             "type": "command",
             "command": "node .claude/bin/memory-reminder.js",
             "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "node .claude/bin/memory-compress.js",
+            "timeout": 10
           }
         ]
       }

@@ -1,6 +1,6 @@
 # tt-b 快速开始
 
-模型感知的智能体工作流工具包。一条命令，为你的项目加上记忆系统、8 个钩子、11 个 MCP 工具和 10 个技能。
+模型感知的智能体工作流工具包。一条命令，为你的项目加上记忆系统、8 个钩子、12 个 MCP 工具和 10 个技能。
 
 > 完整架构和 API 参考请查阅 [README-zh-CN.md](README-zh-CN.md)。
 
@@ -182,7 +182,7 @@ node .claude/bin/tt-b-mcp-server.js
 # REST API 服务器——HTTP 接口，适合脚本集成
 node .claude/bin/tt-b-rest-server.js
 
-# 完整生命周期——9 阶段引导（REST + 查看器 + 健康检查 + 搜索索引）
+# 完整生命周期——8 阶段引导（REST + 查看器 + 健康检查 + 搜索索引）
 node .claude/bin/tt-b-lifecycle.js
 ```
 

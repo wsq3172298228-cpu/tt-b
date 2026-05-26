@@ -1,4 +1,4 @@
-<div align="right">
+<div align="center">
 
 [English](README.md) | [中文](README-zh-CN.md)
 
@@ -235,6 +235,7 @@ tt-b/
 │   ├── health-check.js           # built-in health checks
 │   ├── extract-nodes.js          # knowledge graph node extraction
 │   ├── extract-edges.js          # knowledge graph edge extraction
+│   ├── graph-store.js            # SQLite knowledge graph storage layer
 │   └── subgraph-query.js         # macro aggregation subgraph query (BFS)
 ├── packages/
 │   ├── plugin/                   # Claude/Codex UX layer

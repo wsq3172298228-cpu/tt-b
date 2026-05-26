@@ -477,7 +477,7 @@ ${c.bold}Usage:${c.reset}
 
 ${c.bold}What gets installed:${c.reset}
   • 8 lifecycle hooks (SessionStart, UserPromptSubmit, PreToolUse, ...)
-  • 11 MCP tools (memory_smart_search, memory_save, ...)
+  • 12 MCP tools (memory_smart_search, memory_save, ...)
   • 10+ skills (/recall, /remember, /graph, /grill-me, ...)
   • Model-aware preflight & memory-reminder
   • GML Repository Law (CLAUDE.md)

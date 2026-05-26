@@ -1,7 +1,7 @@
 {
   "name": "tt-b",
   "version": "0.1.0",
-  "description": "Model-aware agent workflow kit for Claude Code. 8 hooks, 11 MCP tools, 10+ skills. One-click install via npx.",
+  "description": "Model-aware agent workflow kit for Claude Code. 8 hooks, 12 MCP tools, 10+ skills. One-click install via npx.",
   "private": false,
   "bin": {
     "tt-b": "./bin/tt-b-setup.js",

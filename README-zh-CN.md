@@ -323,6 +323,7 @@ tt-b/
 │   ├── health-check.js           # 内置健康检查
 │   ├── extract-nodes.js          # 知识图谱节点提取
 │   ├── extract-edges.js          # 知识图谱边提取
+│   ├── graph-store.js            # SQLite 知识图谱存储层
 │   └── subgraph-query.js         # 宏观聚合子图查询（BFS）
 ├── packages/
 │   ├── plugin/                   # Claude/Codex 用户体验层
@@ -382,7 +383,7 @@ tt-b/
 - `bin/tt-b-rest-server.js` - REST API，使用 packages/integrations/rest
 - `bin/tt-b-cleanup.js` - 一键清理
 - `bin/import-agent-workflow.js` - 一键导入
-- `plugin/` - 插件分发（8 个钩子、9 个技能、薄客户端脚本）
+- `plugin/` - 插件分发（8 个钩子、10 个技能、薄客户端脚本）
 - `.claude-plugin/` - Claude Code 市场清单
 - `.codex-plugin/` - Codex 市场清单
 - `templates/` - 新目标项目的干净导入模板
@@ -492,7 +493,7 @@ plugin/
 
 所有钩子脚本都是薄客户端：读取 stdin JSON 并 POST 到 tt-b REST 服务器。包含递归保护（`isSdkChildContext`）以防止 SDK 子会话中的钩子循环。
 
-**技能（9 个用户可调用命令）：**
+**技能（10 个用户可调用命令）：**
 
 | 技能 | 描述 |
 |------|------|
