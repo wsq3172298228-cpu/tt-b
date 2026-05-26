@@ -264,6 +264,15 @@ function install(options) {
   );
   fileAction(actions, hadReminder ? "updated" : "created", reminderTarget);
 
+  const compressTarget = path.join(targetRoot, ".claude/bin/memory-compress.js");
+  const hadCompress = exists(compressTarget);
+  copyFile(
+    path.join(repoRoot, ".claude/bin/memory-compress.js"),
+    compressTarget,
+    options.dryRun,
+  );
+  fileAction(actions, hadCompress ? "updated" : "created", compressTarget);
+
   const mcpServerTarget = path.join(targetRoot, ".claude/bin/tt-b-mcp-server.js");
   const hadMcpServer = exists(mcpServerTarget);
   copyFile(
@@ -290,6 +299,24 @@ function install(options) {
     options.dryRun,
   );
   fileAction(actions, hadLifecycle ? "updated" : "created", lifecycleTarget);
+
+  const graphUpdaterTarget = path.join(targetRoot, ".claude/bin/graph-updater.js");
+  const hadGraphUpdater = exists(graphUpdaterTarget);
+  copyFile(
+    path.join(repoRoot, ".claude/bin/graph-updater.js"),
+    graphUpdaterTarget,
+    options.dryRun,
+  );
+  fileAction(actions, hadGraphUpdater ? "updated" : "created", graphUpdaterTarget);
+
+  const postCommitTarget = path.join(targetRoot, ".claude/bin/post-commit-hook.js");
+  const hadPostCommit = exists(postCommitTarget);
+  copyFile(
+    path.join(repoRoot, ".claude/bin/post-commit-hook.js"),
+    postCommitTarget,
+    options.dryRun,
+  );
+  fileAction(actions, hadPostCommit ? "updated" : "created", postCommitTarget);
 
   const functionsTarget = path.join(targetRoot, ".claude/functions");
   const hadFunctions = exists(functionsTarget);
@@ -370,6 +397,23 @@ function install(options) {
   copyDir(path.join(repoRoot, ".codex-plugin"), codexPluginTarget, options.dryRun);
   fileAction(actions, hadCodexPlugin ? "updated" : "created", codexPluginTarget);
 
+  // Install better-sqlite3 dependency if not present
+  if (!options.dryRun) {
+    const targetPkgJson = path.join(targetRoot, "package.json");
+    const hasPackageJson = exists(targetPkgJson);
+    const hasNodeModules = exists(path.join(targetRoot, "node_modules", "better-sqlite3"));
+
+    if (hasPackageJson && !hasNodeModules) {
+      try {
+        const { execFileSync } = require("child_process");
+        execFileSync("npm", ["install", "better-sqlite3"], { cwd: targetRoot, timeout: 60000, encoding: "utf8", stdio: "pipe" });
+        fileAction(actions, "installed", path.join(targetRoot, "node_modules/better-sqlite3"));
+      } catch (e) {
+        fileAction(actions, "warning", `${targetRoot}: npm install better-sqlite3 failed — run manually`);
+      }
+    }
+  }
+
   return { targetRoot, actions };
 }
 
@@ -391,6 +435,7 @@ function main() {
     process.stdout.write("- Claude Code: open the target project and read CLAUDE.md.\n");
     process.stdout.write("- OpenCode: open the target project and run /init if needed.\n");
     process.stdout.write("- Preflight: node .claude/bin/model-preflight.js --host opencode --model provider/model --text\n");
+    process.stdout.write("- Graph hook: cp .claude/bin/post-commit-hook.js .git/hooks/post-commit && chmod +x .git/hooks/post-commit\n");
   } catch (error) {
     process.stderr.write(`Error: ${error.message}\n\n${usage()}\n`);
     process.exitCode = 1;

@@ -85,7 +85,7 @@ function createMcpHandler({ provider, config, searchIndexData }) {
         return wrap(fn.restoreMemory({ snapshot: args.snapshot, memoryMap: config.memoryMap, writeText: provider.writeText }));
       case "tt-b_memory_subgraph": {
         const content = provider.readText(config.memoryMap.knowledgeGraph);
-        return wrap(fn.subgraphQuery({ content, entity: args.entity, depth: args.depth, direction: args.direction }));
+        return wrap(fn.subgraphQuery({ content, entity: args.entity, depth: args.depth, direction: args.direction, projectRoot: config.projectRoot }));
       }
       default:
         return err("Unknown tool: " + name);
