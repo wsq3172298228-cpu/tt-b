@@ -93,30 +93,13 @@ async function installToProject(targetDir) {
   }
 
   // Step 4: install better-sqlite3
-  const spinnerSqlite = new Spinner("Installing better-sqlite3...").start();
   let sqliteOk = false;
-  try {
-    execSync("npm install better-sqlite3", {
-      cwd: resolvedTarget,
-      encoding: "utf8",
-      stdio: "pipe",
-      timeout: 120000,
-    });
-    spinnerSqlite.succeed("better-sqlite3 installed");
-    state.sqliteInstalled = true;
-    sqliteOk = true;
-  } catch (e) {
-    spinnerSqlite.fail("better-sqlite3 install failed");
-    warn("SQLite graph database will not be available (markdown-only mode).");
-    warn("To fix later: install build tools, then run `npm install better-sqlite3`");
+  sqliteOk = await installSqlite(resolvedTarget, state);
 
-    // diagnose
-    const platform = process.platform;
-    if (platform === "darwin") {
-      info("macOS: run `xcode-select --install` to install build tools");
-    } else if (platform === "linux") {
-      info("Linux: run `apt install build-essential python3`");
-    }
+  if (!sqliteOk) {
+    warn("Rolling back all changes...");
+    rollback(state, resolvedTarget);
+    return false;
   }
 
   spacer();
@@ -139,6 +122,72 @@ async function installToProject(targetDir) {
   }
 
   return success;
+}
+
+async function installSqlite(targetDir, state) {
+  const spinnerSqlite = new Spinner("Installing better-sqlite3...").start();
+  try {
+    execSync("npm install better-sqlite3", {
+      cwd: targetDir,
+      encoding: "utf8",
+      stdio: "pipe",
+      timeout: 120000,
+    });
+    spinnerSqlite.succeed("better-sqlite3 installed");
+    state.sqliteInstalled = true;
+    return true;
+  } catch (e) {
+    spinnerSqlite.fail("better-sqlite3 install failed");
+  }
+
+  // Diagnose and offer retry
+  const platform = process.platform;
+  spacer();
+  info("better-sqlite3 requires native build tools to compile.");
+  if (platform === "darwin") {
+    info("macOS: install Xcode Command Line Tools first:");
+    info("  xcode-select --install");
+  } else if (platform === "linux") {
+    info("Linux: install build tools first:");
+    info("  sudo apt install build-essential python3");
+  } else {
+    info("Windows: install build tools first:");
+    info("  npm install --global windows-build-tools");
+  }
+
+  spacer();
+
+  // Offer to retry with sudo
+  if (platform !== "win32") {
+    const retryWithSudo = await confirm("Retry with sudo npm install?", { default: true });
+    if (retryWithSudo) {
+      const spinner2 = new Spinner("Installing better-sqlite3 with sudo...").start();
+      try {
+        execSync("sudo npm install better-sqlite3", {
+          cwd: targetDir,
+          encoding: "utf8",
+          stdio: "pipe",
+          timeout: 120000,
+        });
+        spinner2.succeed("better-sqlite3 installed (sudo)");
+        state.sqliteInstalled = true;
+        return true;
+      } catch (e2) {
+        spinner2.fail("sudo install also failed");
+      }
+    }
+  }
+
+  // Offer manual install
+  spacer();
+  const manualInstall = await confirm("Already installed or want to install manually later? Continue without SQLite?", { default: false });
+  if (manualInstall) {
+    warn("Continuing without better-sqlite3. SQLite graph database will not be available.");
+    warn("To install later: cd " + targetDir + " && npm install better-sqlite3");
+    return true;
+  }
+
+  return false;
 }
 
 function rollback(state, targetDir) {
