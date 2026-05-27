@@ -47,8 +47,8 @@ async function interactive() {
   const choice = await prompt("", {
     choices: [
       { label: "Install to ~/.claude/ (global)", value: "global", recommended: true },
-      { label: "Install to current project", value: "project" },
-      { label: "Install to specific project (with SQLite graph)", value: "specific" },
+      { label: "Install to current project (with SQLite graph)", value: "project" },
+      { label: "Install to specific project path (with SQLite graph)", value: "specific" },
       { label: "Health check", value: "health" },
       { label: "Uninstall", value: "uninstall" },
       { label: "Exit", value: "exit" },

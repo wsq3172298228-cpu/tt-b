@@ -9,43 +9,9 @@ const { detectRepoRoot } = require("../lib/repo");
 const { fileExists } = require("../lib/utils");
 const { ok, fail, info, warn, heading, spacer, Spinner, confirm } = require("../lib/ui");
 
-function installProject() {
-  heading("Install tt-b to current project");
-
-  const detected = detectRepoRoot();
-  if (!detected) {
-    fail("Cannot find tt-b package.");
-    fail("Run from the tt-b repo or install via: npm install -g tt-b");
-    return false;
-  }
-
-  const { root, source } = detected;
-  const deployScript = path.join(root, "bin", "import-agent-workflow.js");
-
-  if (!fileExists(deployScript)) {
-    fail(`Deploy script not found: ${deployScript}`);
-    return false;
-  }
-
-  info(`Source: ${root} (${source})`);
-  info(`Target: ${process.cwd()}`);
-  spacer();
-
-  const spinner = new Spinner("Installing to current project...").start();
-
-  try {
-    const output = execSync(`node "${deployScript}" --force`, {
-      encoding: "utf8",
-      cwd: process.cwd(),
-      timeout: 60000,
-    });
-    spinner.succeed("Project-level install complete");
-    console.log(output);
-    return true;
-  } catch (e) {
-    spinner.fail(`Install failed: ${e.message}`);
-    return false;
-  }
+async function installProject() {
+  const targetDir = process.cwd();
+  await installToProject(targetDir);
 }
 
 async function installToProject(targetDir) {
