@@ -1,7 +1,7 @@
 {
   "name": "tt-b",
   "version": "0.1.0",
-  "description": "Model-aware agent workflow kit with memory-backed engineering tasks. 8 hooks, 12 MCP tools, 10 skills.",
+  "description": "Model-aware agent workflow kit with memory-backed engineering tasks. 8 hooks, 12 MCP tools, 15 skills.",
   "license": "MIT",
   "skills": ["./skills/"]
 }

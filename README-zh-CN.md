@@ -30,7 +30,7 @@
 # 1. 注册插件市场
 /plugin marketplace add wsq3172298228-cpu/tt-b
 
-# 2. 安装插件（自动注册 8 hooks + MCP + 10 skills）
+# 2. 安装插件（自动注册 8 hooks + MCP + 15 skills）
 /plugin install tt-b
 
 # 3. 验证
@@ -60,6 +60,9 @@ npx tt-b install --global
 # 2. 验证
 ls ~/.claude/bin/
 npx tt-b health
+
+# 3. 如有问题，自动修复
+npx tt-b doctor
 ```
 
 ### Codex CLI
@@ -163,6 +166,84 @@ node bin/import-agent-workflow.js /path/to/target-project --dry-run
 node bin/import-agent-workflow.js /path/to/target-project --force
 ```
 
+## SQLite 图数据库
+
+导入后，目标项目自动获得 SQLite 知识图谱存储能力。`graph-store.js` 提供统一的存储抽象，支持 markdown 和 SQLite 双写。
+
+### 工作原理
+
+```
+knowledge-graph.md  ←→  graph_memory.db (SQLite)
+     (人类可读)            (程序查询)
+```
+
+- **读取时**：优先从 `graph_memory.db` 加载，回退到 markdown 解析
+- **写入时**：同时写入 SQLite 和 markdown，保持同步
+- **查询时**：通过 `graph-store.js` 的 `load()`/`save()`/`stats()` 接口操作
+
+### 启用步骤
+
+**场景一：目标项目有 `package.json`**
+
+导入器自动完成所有配置：
+
+```bash
+node bin/import-agent-workflow.js /path/to/target-project
+# 自动：安装 better-sqlite3 + 部署 graph-store.js + 创建 graph_memory.db
+```
+
+**场景二：目标项目无 `package.json`**
+
+需要手动初始化：
+
+```bash
+cd /path/to/target-project
+npm init -y                              # 创建 package.json
+npm install better-sqlite3               # 安装 SQLite 依赖
+```
+
+**场景三：Git 仓库在父级目录**
+
+如果 `.git/` 不在目标项目内部（monorepo 结构），hook 需挂载到仓库根：
+
+```bash
+# 找到 .git 所在位置
+git rev-parse --git-dir
+
+# 挂载到仓库根（影响该仓库下所有项目）
+cp .claude/bin/post-commit-hook.js $(git rev-parse --git-dir)/hooks/post-commit
+chmod +x $(git rev-parse --git-dir)/hooks/post-commit
+```
+
+### 验证
+
+```bash
+# 检查 SQLite 数据库是否创建
+ls .claude/memory/graph_memory.db
+
+# 测试 graph-store 可用性
+node -e "
+const createGraphStore = require('./.claude/functions/graph-store');
+const store = createGraphStore({ projectRoot: '.' });
+console.log(store.stats());
+store.close();
+"
+```
+
+预期输出：`{ nodeCount: 0, edgeCount: 0, commitCount: 0, staleCount: 0, source: 'sqlite' }`
+
+### 依赖说明
+
+`better-sqlite3` 是原生 C++ 模块，需要构建工具：
+
+| 平台 | 安装命令 |
+|------|---------|
+| macOS | `xcode-select --install` |
+| Linux | `apt install build-essential python3` |
+| Windows | `npm install --global windows-build-tools` |
+
+如遇权限问题：`sudo npm install better-sqlite3` 或使用 `npx tt-b doctor` 自动修复。
+
 ## 一键清理
 
 从目标项目中移除所有 tt-b 产物：
@@ -209,7 +290,7 @@ npx --yes github:YOUR_GITHUB_USERNAME/tt-b .
 ### Claude Code（插件，推荐）
 
 ```
-安装 tt-b Claude Code 插件：运行 `/plugin marketplace add wsq3172298228-cpu/tt-b` 然后 `/plugin install tt-b` — 插件自动注册 8 个钩子，通过 `.mcp.json` 接入 MCP 服务器，暴露 10 个技能（/remember、/recall、/forget、/verify、/preflight、/graph、/memories、/session-history、/snapshot、/grill-me）。无需额外配置。
+安装 tt-b Claude Code 插件：运行 `/plugin marketplace add wsq3172298228-cpu/tt-b` 然后 `/plugin install tt-b` — 插件自动注册 8 个钩子，通过 `.mcp.json` 接入 MCP 服务器，暴露 15 个技能（/remember、/recall、/forget、/verify、/preflight、/graph、/memories、/session-history、/snapshot、/grill-me、/goal-ttb、/loop、/schedule、/change-me、/skill-health）。无需额外配置。
 ```
 
 ### Claude Code（npx 一键导入）
@@ -285,6 +366,15 @@ node bin/tt-b-openclaw-install.js
 安装后验证：
 
 ```bash
+# 综合健康检查（推荐）
+npx tt-b health
+
+# 自动诊断和修复问题
+npx tt-b doctor
+
+# 详细输出（显示构建工具状态）
+npx tt-b health --verbose
+
 # 检查生成的文件是否存在
 ls .claude/memory/knowledge-graph.md .claude/memory/session-state.md
 
@@ -295,6 +385,38 @@ node .claude/bin/tt-b-mcp-server.js --help
 # 运行健康检查（如 lifecycle 可用）
 node .claude/bin/tt-b-lifecycle.js --help
 ```
+
+### 健康检查和自动修复
+
+`tt-b` 提供内置的健康检查和自动修复功能：
+
+```bash
+# 检查安装状态
+npx tt-b health
+
+# 自动修复问题（包括安装缺失的依赖）
+npx tt-b doctor
+```
+
+`doctor` 命令会自动：
+- 安装缺失的 `better-sqlite3` 依赖
+- 重新部署缺失的配置文件
+- 修复损坏的 `settings.json`
+
+如果遇到权限错误：
+
+```bash
+# macOS/Linux - 全局安装可能需要 sudo
+sudo npx tt-b doctor
+
+# 或手动安装 better-sqlite3
+npm install better-sqlite3
+```
+
+`better-sqlite3` 是原生模块，需要构建工具：
+- **macOS**: `xcode-select --install`
+- **Linux**: `apt install build-essential python3`
+- **Windows**: `npm install --global windows-build-tools`
 
 ## 架构
 
@@ -506,6 +628,12 @@ plugin/
 | `/preflight` | 检测当前宿主 CLI、模型和能力层级 |
 | `/graph` | 显示知识图谱——所有节点和边 |
 | `/memories` | 列出所有记忆文件及元数据（大小、修改时间、条目数） |
+| `/grill-me-ttb` | 面试用户以澄清目标，基于记忆，更新知识图谱 |
+| `/goal-ttb` | 自主目标追求循环：计划、执行、验证、重复直到完成 |
+| `/browser-mcp` | 使用 Browser MCP 进行浏览器自动化和网页数据抓取 |
+| `/file-index` | 项目文件索引和分类，支持智能文件发现 |
+| `/mysql-query` | MySQL 数据库查询工具，自动连接和表结构检查 |
+| `/ui-ux-pro-max` | UI/UX 设计系统，包含设计令牌、排版和平台模板 |
 
 **钩子脚本环境变量：**
 

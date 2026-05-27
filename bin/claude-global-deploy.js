@@ -18,8 +18,25 @@
 
 const fs = require("fs");
 const path = require("path");
-const { execSync } = require("child_process");
-const crypto = require("crypto");
+
+const {
+  expandHome,
+  homeDir,
+  claudeDir,
+  fileExists,
+  isDir,
+  readText,
+  readJson,
+  writeText,
+  writeJson,
+  ensureDir,
+  copyDirRecursive,
+  listDirRecursive,
+  shortHash,
+  timestamp,
+} = require("./lib/utils");
+
+const { c, ok, fail, warn, info, heading, spacer, Spinner, ProgressBar, formatTable } = require("./lib/ui");
 
 const MARKER_PREFIX = "tt-b-deployed";
 const BACKUP_DIR_NAME = "backups";
@@ -82,92 +99,13 @@ function getDeployPlan(repoRoot) {
   ];
 }
 
-// ─── Utilities ───
-
-function expandHome(p) {
-  if (p.startsWith("~/") || p === "~") {
-    return path.join(process.env.HOME || process.env.USERPROFILE, p.slice(1));
-  }
-  return p;
-}
-
-function readText(filePath) {
-  try {
-    return fs.readFileSync(filePath, "utf8");
-  } catch (e) {
-    if (e.code === "ENOENT") return null;
-    throw e;
-  }
-}
-
-function writeText(filePath, content) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, content, "utf8");
-}
-
-function ensureDir(dirPath) {
-  fs.mkdirSync(dirPath, { recursive: true });
-}
-
-function fileExists(p) {
-  try {
-    fs.accessSync(p);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function isDir(p) {
-  try {
-    return fs.statSync(p).isDirectory();
-  } catch {
-    return false;
-  }
-}
-
-function copyDirRecursive(src, dest) {
-  ensureDir(dest);
-  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
-    const srcPath = path.join(src, entry.name);
-    const destPath = path.join(dest, entry.name);
-    if (entry.isDirectory()) {
-      copyDirRecursive(srcPath, destPath);
-    } else {
-      fs.copyFileSync(srcPath, destPath);
-    }
-  }
-}
-
-function listDirRecursive(dir, prefix = "") {
-  const results = [];
-  if (!isDir(dir)) return results;
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
-    if (entry.isDirectory()) {
-      results.push(...listDirRecursive(path.join(dir, entry.name), rel));
-    } else {
-      results.push(rel);
-    }
-  }
-  return results;
-}
-
-function timestamp() {
-  return new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-}
-
-function shortHash(content) {
-  return crypto.createHash("md5").update(content).digest("hex").slice(0, 8);
-}
-
 // ─── Backup ───
 
 function getBackupRoot() {
   return expandHome(`~/.claude/${BACKUP_DIR_NAME}/tt-b`);
 }
 
-function createBackup(deployPlan, targetPaths) {
+function createBackup(deployPlan) {
   const backupId = timestamp();
   const backupDir = path.join(getBackupRoot(), backupId);
   ensureDir(backupDir);
@@ -178,8 +116,12 @@ function createBackup(deployPlan, targetPaths) {
     files: [],
   };
 
-  for (const item of deployPlan) {
+  const progress = new ProgressBar(deployPlan.length, { label: "Backing up:" });
+
+  for (let i = 0; i < deployPlan.length; i++) {
+    const item = deployPlan[i];
     const targetPath = expandHome(item.target);
+    progress.update(i + 1, item.id);
 
     if (item.isDir) {
       if (isDir(targetPath)) {
@@ -215,7 +157,7 @@ function createBackup(deployPlan, targetPaths) {
   }
 
   const manifestPath = path.join(backupDir, MANIFEST_NAME);
-  fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), "utf8");
+  writeJson(manifestPath, manifest);
 
   return { backupId, backupDir, manifest };
 }
@@ -228,13 +170,9 @@ function listBackups() {
   for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
     const manifestPath = path.join(root, entry.name, MANIFEST_NAME);
-    const content = readText(manifestPath);
-    if (content) {
-      try {
-        backups.push(JSON.parse(content));
-      } catch {
-        // skip corrupt manifest
-      }
+    const manifest = readJson(manifestPath);
+    if (manifest) {
+      backups.push(manifest);
     }
   }
 
@@ -248,19 +186,13 @@ function getLatestBackup() {
 
 // ─── Managed file detection ───
 
-const MANAGED_HEADER_RE = new RegExp(
-  `^<!--\\s*${MARKER_PREFIX}[:\\s]`,
-  "m"
-);
+const MANAGED_HEADER_RE = new RegExp(`^<!--\\s*${MARKER_PREFIX}[:\\s]`, "m");
 
 function isManagedFile(filePath) {
   const content = readText(filePath);
   if (!content) return false;
-  // Check HTML comment marker (deploy marker)
   if (MANAGED_HEADER_RE.test(content)) return true;
-  // Check managed-block marker (agent-workflow)
   if (content.includes(MARKER_START)) return true;
-  // Check JSON embedded marker
   if (filePath.endsWith(".json")) {
     try {
       const obj = JSON.parse(content);
@@ -276,26 +208,20 @@ function managedHeader(itemId) {
 
 function wrapWithManagedMarker(content, itemId, isJson) {
   if (isJson) {
-    // For JSON files, embed marker as a field instead of a comment
     try {
       const obj = JSON.parse(content);
       obj._tt_b_managed = itemId;
       return JSON.stringify(obj, null, 2) + "\n";
-    } catch {
-      // fallback to comment if parse fails
-    }
+    } catch {}
   }
-  const header = managedHeader(itemId);
-  return `${header}\n${content}`;
+  return `${managedHeader(itemId)}\n${content}`;
 }
 
 function stripManagedMarker(content) {
-  // Strip HTML comment marker (use [\s\S]*? for multi-line safety)
   let cleaned = content.replace(
     new RegExp(`^<!--\\s*${MARKER_PREFIX}[\\s\\S]*?-->\\s*`),
     ""
   );
-  // Strip JSON embedded marker
   try {
     const obj = JSON.parse(cleaned);
     if (obj._tt_b_managed) {
@@ -335,14 +261,11 @@ function mergeJsonHooks(existingText, templateText) {
     return JSON.stringify(template, null, 2) + "\n";
   }
 
-  // Strip managed markers before parsing
   const cleanExisting = stripManagedMarker(existingText);
   const existing = JSON.parse(cleanExisting);
   const mergedHooks = { ...(existing.hooks || {}) };
 
-  for (const [eventName, templateEntries] of Object.entries(
-    template.hooks || {}
-  )) {
+  for (const [eventName, templateEntries] of Object.entries(template.hooks || {})) {
     const existingEntries = mergedHooks[eventName] || [];
     const seen = new Set(existingEntries.map((e) => JSON.stringify(e)));
     const result = [...existingEntries];
@@ -372,15 +295,21 @@ function deploy(options) {
   // 1. Backup existing files
   let backup = null;
   if (!options.dryRun) {
-    const targetPaths = plan.map((item) => expandHome(item.target));
-    backup = createBackup(plan, targetPaths);
+    backup = createBackup(plan);
     results.push({ action: "backup", path: backup.backupDir, status: "ok" });
   } else {
     results.push({ action: "backup", path: "(dry-run)", status: "skipped" });
   }
 
+  spacer();
+
   // 2. Deploy each file
-  for (const item of plan) {
+  const progress = new ProgressBar(plan.length, { label: "Deploying:" });
+
+  for (let i = 0; i < plan.length; i++) {
+    const item = plan[i];
+    progress.update(i + 1, item.id);
+
     const targetPath = expandHome(item.target);
     const sourceExists = item.isDir
       ? isDir(item.source)
@@ -436,10 +365,7 @@ function deploy(options) {
     let finalContent;
     switch (item.merge) {
       case "managed-block":
-        finalContent = mergeManagedBlock(
-          existingContent || "",
-          sourceContent
-        );
+        finalContent = mergeManagedBlock(existingContent || "", sourceContent);
         break;
       case "json-merge-hooks":
         finalContent = mergeJsonHooks(existingContent, sourceContent);
@@ -462,7 +388,6 @@ function deploy(options) {
         break;
     }
 
-    // Wrap with managed marker (except for managed-block which already has markers)
     if (item.merge !== "managed-block") {
       const isJson = item.target.endsWith(".json");
       finalContent = wrapWithManagedMarker(finalContent, item.id, isJson);
@@ -497,11 +422,10 @@ function restore(options) {
 
   if (backupId) {
     const manifestPath = path.join(getBackupRoot(), backupId, MANIFEST_NAME);
-    const content = readText(manifestPath);
-    if (!content) {
+    manifest = readJson(manifestPath);
+    if (!manifest) {
       throw new Error(`Backup not found: ${backupId}`);
     }
-    manifest = JSON.parse(content);
   } else {
     const latest = getLatestBackup();
     if (!latest) {
@@ -513,7 +437,12 @@ function restore(options) {
   const backupDir = path.join(getBackupRoot(), manifest.id);
   const results = [];
 
-  for (const file of manifest.files) {
+  const progress = new ProgressBar(manifest.files.length, { label: "Restoring:" });
+
+  for (let i = 0; i < manifest.files.length; i++) {
+    const file = manifest.files[i];
+    progress.update(i + 1, file.id);
+
     const backupPath = path.join(backupDir, file.backupPath);
     const targetPath = expandHome(file.target);
 
@@ -538,7 +467,6 @@ function restore(options) {
       continue;
     }
 
-    // Restore the original content (strip our managed markers if present)
     const cleanContent = stripManagedMarker(backupContent);
     writeText(targetPath, cleanContent);
     results.push({
@@ -584,7 +512,12 @@ function deleteDeployed(options) {
   const plan = getDeployPlan(path.resolve(__dirname, ".."));
   const results = [];
 
-  for (const item of plan) {
+  const progress = new ProgressBar(plan.length, { label: "Cleaning:" });
+
+  for (let i = 0; i < plan.length; i++) {
+    const item = plan[i];
+    progress.update(i + 1, item.id);
+
     const targetPath = expandHome(item.target);
 
     if (!fileExists(targetPath)) {
@@ -598,7 +531,6 @@ function deleteDeployed(options) {
     }
 
     if (item.isDir) {
-      // For dirs, only remove files that have our managed marker
       const relFiles = listDirRecursive(targetPath);
       let removed = 0;
       for (const rel of relFiles) {
@@ -618,7 +550,6 @@ function deleteDeployed(options) {
     } else {
       if (isManagedFile(targetPath)) {
         const content = readText(targetPath);
-        // For managed-block files, strip the block instead of deleting
         if (content && content.includes(MARKER_START)) {
           const pattern = new RegExp(
             `\\n?${escapeRegExp(MARKER_START)}[\\s\\S]*?${escapeRegExp(MARKER_END)}\\n?`,
@@ -688,7 +619,6 @@ function verify() {
       let parseable = true;
       if (exists && item.target.endsWith(".json")) {
         try {
-          // Strip managed marker comment before parsing
           const cleanContent = stripManagedMarker(content);
           JSON.parse(cleanContent);
         } catch {
@@ -707,23 +637,33 @@ function verify() {
     }
   }
 
-  // Check hooks work
   let hooksOk = false;
   try {
-    const settingsPath = expandHome("~/.claude/settings.json");
-    const settings = JSON.parse(readText(settingsPath) || "{}");
-    hooksOk =
-      settings.hooks &&
-      settings.hooks.SessionStart &&
-      settings.hooks.SessionStart.length > 0;
-  } catch {
-    // ignore
-  }
+    const settings = readJson(expandHome("~/.claude/settings.json"));
+    hooksOk = settings?.hooks?.SessionStart?.length > 0;
+  } catch {}
 
   return { checks, hooksOk };
 }
 
 // ─── CLI ───
+
+function formatAction(action) {
+  const icons = {
+    backup: "[backup]",
+    create: "[+new]",
+    update: "[~upd]",
+    kept: "[=keep]",
+    skip: "[-skip]",
+    "deploy-dir": "[dir]",
+    restore: "[undo]",
+    removed: "[-del]",
+    "removed-new": "[-del]",
+    "clean-dir": "[clean]",
+    "stripped-block": "[strip]",
+  };
+  return icons[action.action] || `[${action.action}]`;
+}
 
 function usage() {
   return `Usage: node bin/claude-global-deploy.js [options]
@@ -792,23 +732,6 @@ function parseArgs(argv) {
   return options;
 }
 
-function formatAction(action) {
-  const icons = {
-    backup: "[backup]",
-    create: "[+new]",
-    update: "[~upd]",
-    kept: "[=keep]",
-    skip: "[-skip]",
-    "deploy-dir": "[dir]",
-    restore: "[undo]",
-    removed: "[-del]",
-    "removed-new": "[-del]",
-    "clean-dir": "[clean]",
-    "stripped-block": "[strip]",
-  };
-  return icons[action.action] || `[${action.action}]`;
-}
-
 function main() {
   try {
     const options = parseArgs(process.argv.slice(2));
@@ -825,82 +748,118 @@ function main() {
         console.log("No backups found.");
         return;
       }
-      console.log(`Available backups (${backups.length}):\n`);
-      for (const b of backups) {
-        console.log(`  ${b.id}  (${b.files.length} files)  ${b.created}`);
-      }
+      heading(`Available Backups (${backups.length})`);
+      spacer();
+      const rows = backups.map((b) => [
+        b.id,
+        `${b.files.length} files`,
+        new Date(b.created).toLocaleString(),
+      ]);
+      console.log(formatTable(rows, { indent: 2 }));
       return;
     }
 
     // ── Verify ──
     if (options.verify) {
+      heading("Deployment Verification");
+      spacer();
       const result = verify();
-      console.log("Deployment verification:\n");
-      for (const c of result.checks) {
-        const icon = c.status === "ok" ? "OK" : "FAIL";
-        const extra = c.managed ? " [managed]" : "";
-        console.log(`  ${icon}  ${c.id.padEnd(30)} ${c.target}${extra}`);
-      }
-      console.log(`\nHooks configured: ${result.hooksOk ? "yes" : "no"}`);
-      const allOk = result.checks.every((c) => c.status === "ok");
-      console.log(`\nOverall: ${allOk ? "HEALTHY" : "ISSUES FOUND"}`);
+      const rows = result.checks.map((check) => {
+        const icon = check.status === "ok" ? "✓" : "✗";
+        const color = check.status === "ok" ? c.green : c.red;
+        const managed = check.managed ? " [managed]" : "";
+        return [
+          `${color}${icon}${c.reset}`,
+          check.id,
+          check.target + managed,
+        ];
+      });
+      console.log(formatTable(rows, { indent: 2 }));
+      spacer();
+      console.log(`Hooks configured: ${result.hooksOk ? `${c.green}yes${c.reset}` : `${c.red}no${c.reset}`}`);
+      const allOk = result.checks.every((check) => check.status === "ok");
+      spacer();
+      console.log(`Overall: ${allOk ? `${c.green}HEALTHY${c.reset}` : `${c.red}ISSUES FOUND${c.reset}`}`);
       process.exitCode = allOk ? 0 : 1;
       return;
     }
 
     // ── Restore ──
     if (options.restore) {
+      heading(options.dryRun ? "Dry Run: Restore" : "Restore from Backup");
+      spacer();
       const result = restore(options);
-      const mode = options.dryRun ? "Dry run" : "Restore";
-      console.log(`${mode} from backup: ${result.manifest.id}\n`);
+      info(`Backup: ${result.manifest.id}`);
+      spacer();
       for (const r of result.results) {
-        console.log(`  ${formatAction(r)} ${r.id} -> ${r.target}${r.reason ? ` (${r.reason})` : ""}`);
+        const icon = r.status === "ok" ? ok : r.status === "dry-run" ? info : fail;
+        icon(`${formatAction(r)} ${r.id} -> ${r.target}${r.reason ? ` (${r.reason})` : ""}`);
       }
       if (!options.dryRun) {
-        console.log("\nRestore complete. Run --verify to check.");
+        spacer();
+        ok("Restore complete. Run --verify to check.");
       }
       return;
     }
 
     // ── Delete ──
     if (options.delete) {
+      heading(options.dryRun ? "Dry Run: Delete" : "Delete tt-b Files");
+      spacer();
       const result = deleteDeployed(options);
-      const mode = options.dryRun ? "Dry run" : "Delete";
-      console.log(`${mode} tt-b managed files:\n`);
       for (const r of result.results) {
-        console.log(`  ${formatAction(r)} ${r.id} -> ${r.target}${r.reason ? ` (${r.reason})` : ""}`);
+        const icon = r.status === "ok" ? ok : r.status === "dry-run" ? info : fail;
+        icon(`${formatAction(r)} ${r.id} -> ${r.target}${r.reason ? ` (${r.reason})` : ""}`);
       }
       if (!options.dryRun) {
-        console.log("\nDelete complete. Run --verify to check.");
+        spacer();
+        ok("Delete complete. Run --verify to check.");
       }
       return;
     }
 
     // ── Deploy (default) ──
+    heading(options.dryRun ? "Dry Run: Deploy" : "Deploy tt-b");
+    spacer();
+
     const result = deploy(options);
-    const mode = options.dryRun ? "Dry run" : "Deploy";
-    console.log(`${mode} complete.\n`);
 
     if (result.backup && !options.dryRun) {
-      console.log(`Backup: ${result.backup.backupDir}\n`);
+      ok(`Backup: ${result.backup.backupDir}`);
+      spacer();
     }
 
     for (const r of result.results) {
-      console.log(`  ${formatAction(r)} ${r.id || ""}${r.target ? ` -> ${r.target}` : ""}${r.reason ? ` (${r.reason})` : ""}${r.files !== undefined ? ` [${r.files} files]` : ""}`);
+      const icon = r.status === "ok" ? ok : r.status === "dry-run" ? info : r.action === "kept" ? info : fail;
+      icon(
+        `${formatAction(r)} ${r.id || ""}${r.target ? ` -> ${r.target}` : ""}${
+          r.reason ? ` (${r.reason})` : ""
+        }${r.files !== undefined ? ` [${r.files} files]` : ""}`
+      );
     }
 
     if (!options.dryRun) {
-      console.log("\nRunning verification...\n");
+      spacer();
+      heading("Verification");
+      spacer();
       const v = verify();
-      for (const c of v.checks) {
-        const icon = c.status === "ok" ? "OK" : "FAIL";
-        console.log(`  ${icon}  ${c.id}`);
-      }
-      console.log(`\nHooks: ${v.hooksOk ? "OK" : "NOT CONFIGURED"}`);
-      console.log("\nDone. Restart Claude Code to pick up new hooks.");
+      const rows = v.checks.map((c) => {
+        const icon = c.status === "ok" ? "✓" : "✗";
+        const color = c.status === "ok" ? c.green : c.red;
+        return [`${color}${icon}${c.reset}`, c.id];
+      });
+      console.log(formatTable(rows, { indent: 2 }));
+      spacer();
+      console.log(`Hooks: ${v.hooksOk ? `${c.green}OK${c.reset}` : `${c.red}NOT CONFIGURED${c.reset}`}`);
+      spacer();
+      ok("Done. Restart Claude Code to pick up new hooks.");
     }
   } catch (error) {
-    console.error(`Error: ${error.message}\n`);
+    fail(`Error: ${error.message}`);
+    if (process.env.DEBUG) {
+      console.error(error.stack);
+    }
+    console.error("");
     console.error(usage());
     process.exitCode = 1;
   }

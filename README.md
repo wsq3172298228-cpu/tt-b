@@ -4,6 +4,9 @@
 
 </div>
 
+<div align="center">
+[快速开始：中文](QUICKSTART-zh-CN.md) 
+</div>
 # tt-b
 
 `tt-b` is a model-aware agent workflow kit for memory-backed engineering tasks.
@@ -74,6 +77,84 @@ node bin/import-agent-workflow.js /path/to/target-project --dry-run
 node bin/import-agent-workflow.js /path/to/target-project --force
 ```
 
+## SQLite Graph Database
+
+After import, the target project automatically gets SQLite knowledge graph storage. `graph-store.js` provides a unified storage abstraction with dual-write to both markdown and SQLite.
+
+### How it works
+
+```
+knowledge-graph.md  ←→  graph_memory.db (SQLite)
+     (human-readable)       (programmatic queries)
+```
+
+- **Read**: loads from `graph_memory.db` first, falls back to markdown parsing
+- **Write**: writes to both SQLite and markdown simultaneously
+- **Query**: use `graph-store.js` API — `load()`, `save()`, `stats()`
+
+### Setup by scenario
+
+**Scenario 1: Target project has `package.json`**
+
+The importer handles everything:
+
+```bash
+node bin/import-agent-workflow.js /path/to/target-project
+# Auto: installs better-sqlite3 + deploys graph-store.js + creates graph_memory.db
+```
+
+**Scenario 2: Target project has no `package.json`**
+
+Manual initialization needed:
+
+```bash
+cd /path/to/target-project
+npm init -y                              # create package.json
+npm install better-sqlite3               # install SQLite dependency
+```
+
+**Scenario 3: Git repo is in a parent directory**
+
+If `.git/` is not inside the target project (monorepo structure), mount the hook at the repo root:
+
+```bash
+# find where .git lives
+git rev-parse --git-dir
+
+# mount at repo root (affects all projects under this repo)
+cp .claude/bin/post-commit-hook.js $(git rev-parse --git-dir)/hooks/post-commit
+chmod +x $(git rev-parse --git-dir)/hooks/post-commit
+```
+
+### Verify
+
+```bash
+# check SQLite database was created
+ls .claude/memory/graph_memory.db
+
+# test graph-store availability
+node -e "
+const createGraphStore = require('./.claude/functions/graph-store');
+const store = createGraphStore({ projectRoot: '.' });
+console.log(store.stats());
+store.close();
+"
+```
+
+Expected output: `{ nodeCount: 0, edgeCount: 0, commitCount: 0, staleCount: 0, source: 'sqlite' }`
+
+### Build tools
+
+`better-sqlite3` is a native C++ module requiring build tools:
+
+| Platform | Install command |
+|----------|----------------|
+| macOS | `xcode-select --install` |
+| Linux | `apt install build-essential python3` |
+| Windows | `npm install --global windows-build-tools` |
+
+Permission issues? Try `sudo npm install better-sqlite3` or `npx tt-b doctor`.
+
 ## One-command cleanup
 
 Remove all tt-b artifacts from a target project:
@@ -121,7 +202,7 @@ npx --yes github:YOUR_GITHUB_USERNAME/tt-b .
 ### Claude Code (plugin, recommended)
 
 ```
-Install tt-b as a Claude Code plugin: run `/plugin marketplace add wsq3172298228-cpu/tt-b` then `/plugin install tt-b` — the plugin registers 8 hooks, auto-wires the MCP server via `.mcp.json`, and exposes 10 skills (/remember, /recall, /forget, /verify, /preflight, /graph, /memories, /session-history, /snapshot, /grill-me). No extra config needed.
+Install tt-b as a Claude Code plugin: run `/plugin marketplace add wsq3172298228-cpu/tt-b` then `/plugin install tt-b` — the plugin registers 8 hooks, auto-wires the MCP server via `.mcp.json`, and exposes 15 skills (/remember, /recall, /forget, /verify, /preflight, /graph, /memories, /session-history, /snapshot, /grill-me, /goal-ttb, /loop, /schedule, /change-me, /skill-health). No extra config needed.
 ```
 
 ### Claude Code (npx one-click import)
@@ -144,10 +225,43 @@ node bin/claude-global-deploy.js
 
 Options: `--dry-run`, `--restore`, `--delete`, `--verify`, `--list-backups`.
 
+### Health check and auto-fix
+
+```bash
+# check installation health
+npx tt-b health
+
+# diagnose and auto-fix issues (installs missing dependencies)
+npx tt-b doctor
+
+# verbose output (shows build tools status)
+npx tt-b health --verbose
+```
+
+The `doctor` command automatically:
+- Installs missing `better-sqlite3` dependency
+- Redeploys missing configuration files
+- Fixes corrupted `settings.json`
+
+If you encounter permission errors during global install:
+
+```bash
+# macOS/Linux - may need sudo for global npm directory
+sudo npx tt-b doctor
+
+# Or install better-sqlite3 manually
+npm install better-sqlite3
+```
+
+Build tools required for `better-sqlite3` (native module):
+- **macOS**: `xcode-select --install`
+- **Linux**: `apt install build-essential python3`
+- **Windows**: `npm install --global windows-build-tools`
+
 ### Codex CLI
 
 ```bash
-# install tt-b plugin for Codex (6 hooks, 12 MCP tools, 10 skills)
+# install tt-b plugin for Codex (6 hooks, 12 MCP tools, 15 skills)
 node bin/tt-b-codex-install.js
 ```
 
@@ -197,6 +311,12 @@ Exposes 4 resources (memory files, contracts) and 12 tools (CRUD, search, snapsh
 After installing for any platform, verify with:
 
 ```bash
+# comprehensive health check (recommended)
+npx tt-b health
+
+# auto-fix any issues
+npx tt-b doctor
+
 # check generated files exist
 ls .claude/memory/knowledge-graph.md .claude/memory/session-state.md
 
@@ -295,7 +415,7 @@ tt-b/
 - `bin/tt-b-rest-server.js` - REST API using packages/integrations/rest
 - `bin/tt-b-cleanup.js` - one-command cleanup
 - `bin/import-agent-workflow.js` - one-command importer
-- `plugin/` - plugin distribution (8 hooks, 10 skills, thin-client scripts)
+- `plugin/` - plugin distribution (8 hooks, 15 skills, thin-client scripts)
 - `.claude-plugin/` - Claude Code marketplace manifest
 - `.codex-plugin/` - Codex marketplace manifest
 - `templates/` - clean import templates for new target projects
@@ -401,16 +521,16 @@ plugin/
 
 **Hook types (Claude: 8, Codex: 6):**
 
-| Hook | Script | Description |
-|------|--------|-------------|
-| `SessionStart` | `session-start.mjs` | Register session, optionally inject memory context |
-| `UserPromptSubmit` | `prompt-submit.mjs` | Capture user prompt as observation |
-| `PreToolUse` | `pre-tool-use.mjs` | Enrich context for Edit/Write/Read tools |
-| `PostToolUse` | `post-tool-use.mjs` | Capture tool output as observation |
-| `PreCompact` | `pre-compact.mjs` | Inject context before compaction |
-| `SubagentStart` | `subagent-start.mjs` | Record subagent start event |
-| `SubagentStop` | `subagent-stop.mjs` | Record subagent completion |
-| `Stop` | `stop.mjs` | Trigger session cursor update |
+| Hook               | Script               | Description                                        |
+| ------------------ | -------------------- | -------------------------------------------------- |
+| `SessionStart`     | `session-start.mjs`  | Register session, optionally inject memory context |
+| `UserPromptSubmit` | `prompt-submit.mjs`  | Capture user prompt as observation                 |
+| `PreToolUse`       | `pre-tool-use.mjs`   | Enrich context for Edit/Write/Read tools           |
+| `PostToolUse`      | `post-tool-use.mjs`  | Capture tool output as observation                 |
+| `PreCompact`       | `pre-compact.mjs`    | Inject context before compaction                   |
+| `SubagentStart`    | `subagent-start.mjs` | Record subagent start event                        |
+| `SubagentStop`     | `subagent-stop.mjs`  | Record subagent completion                         |
+| `Stop`             | `stop.mjs`           | Trigger session cursor update                      |
 
 All hook scripts are thin clients: they read stdin JSON and POST to the tt-b
 REST server. They include a recursion guard (`isSdkChildContext`) to prevent
@@ -418,18 +538,23 @@ hook loops in SDK child sessions.
 
 **Skills (10 user-invocable commands):**
 
-| Skill | Description |
-|-------|-------------|
-| `/remember` | Save an insight, decision, or fact to knowledge-graph memory |
-| `/recall` | Search project memory for past decisions and context |
-| `/forget` | Remove specific memory entries (requires confirmation) |
-| `/session-history` | Show the current execution cursor and session state |
-| `/snapshot` | Create a point-in-time snapshot of all memory files |
-| `/verify` | Check memory for staleness, placeholders, and inconsistencies |
-| `/preflight` | Detect the current host CLI, model, and capability tier |
-| `/graph` | Show the knowledge graph — all nodes and edges from memory |
-| `/memories` | List all memory files with metadata (size, modified, entries) |
-| `/grill-me` | Interview user to clarify goals, informed by memory, updates knowledge graph |
+| Skill              | Description                                                                  |
+| ------------------ | ---------------------------------------------------------------------------- |
+| `/remember`        | Save an insight, decision, or fact to knowledge-graph memory                 |
+| `/recall`          | Search project memory for past decisions and context                         |
+| `/forget`          | Remove specific memory entries (requires confirmation)                       |
+| `/session-history` | Show the current execution cursor and session state                          |
+| `/snapshot`        | Create a point-in-time snapshot of all memory files                          |
+| `/verify`          | Check memory for staleness, placeholders, and inconsistencies                |
+| `/preflight`       | Detect the current host CLI, model, and capability tier                      |
+| `/graph`           | Show the knowledge graph — all nodes and edges from memory                   |
+| `/memories`        | List all memory files with metadata (size, modified, entries)                |
+| `/grill-me-ttb`    | Interview user to clarify goals, informed by memory, updates knowledge graph |
+| `/goal-ttb`        | Autonomous goal-pursuit loop: plan, execute, verify, repeat until done       |
+| `/browser-mcp`     | Browser automation and web data fetching using Browser MCP                   |
+| `/file-index`      | Project file indexing and categorization for smart file discovery             |
+| `/mysql-query`     | MySQL database query tool with auto-connection and schema inspection          |
+| `/ui-ux-pro-max`   | UI/UX design system with design tokens, typography, and platform templates   |
 
 **Environment variables for hook scripts:**
 
@@ -443,28 +568,28 @@ The MCP server communicates over stdio using the MCP JSON-RPC 2.0 protocol.
 
 Resources:
 
-| URI | Description |
-|-----|-------------|
-| `tt-b://memory/knowledge-graph` | Long-term project memory |
-| `tt-b://memory/session-state` | Short-term execution cursor |
-| `tt-b://contract/claude-md` | CLAUDE.md startup contract |
-| `tt-b://contract/agents-md` | AGENTS.md instructions |
+| URI                             | Description                 |
+| ------------------------------- | --------------------------- |
+| `tt-b://memory/knowledge-graph` | Long-term project memory    |
+| `tt-b://memory/session-state`   | Short-term execution cursor |
+| `tt-b://contract/claude-md`     | CLAUDE.md startup contract  |
+| `tt-b://contract/agents-md`     | AGENTS.md instructions      |
 
 Tools:
 
-| Tool | Description |
-|------|-------------|
-| `tt-b_preflight` | Detect host, model, capability tier, and startup mode |
-| `tt-b_memory_list` | List all memory files with metadata |
-| `tt-b_memory_read` | Read a memory file by name or path |
-| `tt-b_memory_write` | Write or update a memory file |
-| `tt-b_memory_search` | Search memory files for a regex pattern |
-| `tt-b_memory_snapshot` | Create a point-in-time snapshot of all memory files |
-| `tt-b_memory_diff` | Diff a memory file against old content |
-| `tt-b_memory_restore` | Restore memory from a snapshot |
-| `tt-b_memory_verify` | Verify memory files for staleness and placeholders |
-| `tt-b_memory_nodes` | Extract all knowledge graph nodes |
-| `tt-b_memory_edges` | Extract all knowledge graph edges |
+| Tool                   | Description                                                             |
+| ---------------------- | ----------------------------------------------------------------------- |
+| `tt-b_preflight`       | Detect host, model, capability tier, and startup mode                   |
+| `tt-b_memory_list`     | List all memory files with metadata                                     |
+| `tt-b_memory_read`     | Read a memory file by name or path                                      |
+| `tt-b_memory_write`    | Write or update a memory file                                           |
+| `tt-b_memory_search`   | Search memory files for a regex pattern                                 |
+| `tt-b_memory_snapshot` | Create a point-in-time snapshot of all memory files                     |
+| `tt-b_memory_diff`     | Diff a memory file against old content                                  |
+| `tt-b_memory_restore`  | Restore memory from a snapshot                                          |
+| `tt-b_memory_verify`   | Verify memory files for staleness and placeholders                      |
+| `tt-b_memory_nodes`    | Extract all knowledge graph nodes                                       |
+| `tt-b_memory_edges`    | Extract all knowledge graph edges                                       |
 | `tt-b_memory_subgraph` | Get dependency subgraph (upstream/downstream N hops, LLM-friendly text) |
 
 Usage with Claude Code or any MCP client:
@@ -485,23 +610,23 @@ node .claude/bin/tt-b-rest-server.js
 
 Endpoints:
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/health` | Health check |
-| `GET` | `/preflight` | Model preflight (query: `host`, `model`) |
-| `POST` | `/memory/reminder` | Memory reminder (body: `{event?, prompt?, source?}`) |
+| Method | Path               | Description                                            |
+| ------ | ------------------ | ------------------------------------------------------ |
+| `GET`  | `/health`          | Health check                                           |
+| `GET`  | `/preflight`       | Model preflight (query: `host`, `model`)               |
+| `POST` | `/memory/reminder` | Memory reminder (body: `{event?, prompt?, source?}`)   |
 | `POST` | `/workflow/import` | Import workflow (body: `{targetDir, force?, dryRun?}`) |
-| `GET` | `/memory/list` | List memory files |
-| `GET` | `/memory/read` | Read memory (query: `name`) |
-| `POST` | `/memory/search` | Search memory (body: `{pattern}`) |
-| `GET` | `/memory/snapshot` | Snapshot all memory |
-| `POST` | `/memory/restore` | Restore from snapshot |
-| `GET` | `/memory/verify` | Verify staleness |
-| `GET` | `/memory/nodes` | Knowledge graph nodes |
-| `GET` | `/memory/edges` | Knowledge graph edges |
-| `POST` | `/memory/diff` | Diff memory (body: `{name, oldContent}`) |
-| `POST` | `/memory/write` | Write memory (body: `{name, content}`) |
-| `POST` | `/memory/observe` | Hook event ingestion |
+| `GET`  | `/memory/list`     | List memory files                                      |
+| `GET`  | `/memory/read`     | Read memory (query: `name`)                            |
+| `POST` | `/memory/search`   | Search memory (body: `{pattern}`)                      |
+| `GET`  | `/memory/snapshot` | Snapshot all memory                                    |
+| `POST` | `/memory/restore`  | Restore from snapshot                                  |
+| `GET`  | `/memory/verify`   | Verify staleness                                       |
+| `GET`  | `/memory/nodes`    | Knowledge graph nodes                                  |
+| `GET`  | `/memory/edges`    | Knowledge graph edges                                  |
+| `POST` | `/memory/diff`     | Diff memory (body: `{name, oldContent}`)               |
+| `POST` | `/memory/write`    | Write memory (body: `{name, content}`)                 |
+| `POST` | `/memory/observe`  | Hook event ingestion                                   |
 
 Configuration:
 
@@ -527,16 +652,16 @@ node .claude/bin/tt-b-lifecycle.js
 
 Phases:
 
-| # | Phase | Description |
-|---|-------|-------------|
-| 1 | Load config | Read env vars, CLI args, defaults |
-| 2 | Initialize provider | Create memory file read/write/search abstraction |
-| 3 | Register memory functions | read, write, search, diff, snapshot, restore, verify, nodes, edges |
-| 4 | Register REST endpoints | All memory + preflight + import + lifecycle endpoints |
-| 5 | Register MCP endpoints | MCP tools for memory functions (off by default, use `--mcp`) |
-| 6 | Start viewer | HTML dashboard on `:3743` with live health, memory, and graph stats |
-| 7 | Initialize health check | 4 built-in checks: memory files, helper scripts, staleness, syntax |
-| 8 | Initialize search index | Full-text index of headings, nodes, paths, and words |
+| #   | Phase                     | Description                                                         |
+| --- | ------------------------- | ------------------------------------------------------------------- |
+| 1   | Load config               | Read env vars, CLI args, defaults                                   |
+| 2   | Initialize provider       | Create memory file read/write/search abstraction                    |
+| 3   | Register memory functions | read, write, search, diff, snapshot, restore, verify, nodes, edges  |
+| 4   | Register REST endpoints   | All memory + preflight + import + lifecycle endpoints               |
+| 5   | Register MCP endpoints    | MCP tools for memory functions (off by default, use `--mcp`)        |
+| 6   | Start viewer              | HTML dashboard on `:3743` with live health, memory, and graph stats |
+| 7   | Initialize health check   | 4 built-in checks: memory files, helper scripts, staleness, syntax  |
+| 8   | Initialize search index   | Full-text index of headings, nodes, paths, and words                |
 
 Options:
 
@@ -550,12 +675,12 @@ Options:
 
 Additional endpoints (beyond the standalone REST server):
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/lifecycle/status` | All 8 phase results with timing |
-| `GET` | `/health/detailed` | 4 built-in health checks (on-demand, no background worker) |
-| `POST` | `/search` | Full-text search (body: `{query}`) |
-| `GET` | `/search/stats` | Search index stats (files, terms, by type) |
+| Method | Path                | Description                                                |
+| ------ | ------------------- | ---------------------------------------------------------- |
+| `GET`  | `/lifecycle/status` | All 8 phase results with timing                            |
+| `GET`  | `/health/detailed`  | 4 built-in health checks (on-demand, no background worker) |
+| `POST` | `/search`           | Full-text search (body: `{query}`)                         |
+| `GET`  | `/search/stats`     | Search index stats (files, terms, by type)                 |
 
 The viewer dashboard at `http://localhost:3743` provides a live HTML interface
 showing health status, memory file metadata, knowledge graph node/edge counts,

@@ -1,6 +1,6 @@
 # tt-b 快速开始
 
-模型感知的智能体工作流工具包。一条命令，为你的项目加上记忆系统、8 个钩子、12 个 MCP 工具和 10 个技能。
+模型感知的智能体工作流工具包。一条命令，为你的项目加上记忆系统、8 个钩子、12 个 MCP 工具和 15 个技能。
 
 > 完整架构和 API 参考请查阅 [README-zh-CN.md](README-zh-CN.md)。
 
@@ -19,7 +19,7 @@
 # 1. 注册插件市场
 /plugin marketplace add wsq3172298228-cpu/tt-b
 
-# 2. 安装插件（自动注册 8 hooks + MCP + 10 skills）
+# 2. 安装插件（自动注册 8 hooks + MCP + 15 skills）
 /plugin install tt-b
 ```
 
@@ -43,8 +43,9 @@ npx --yes github:wsq3172298228-cpu/tt-b .
 
 ```bash
 # 2. 验证生成的文件
-ls .claude/bin/       # model-preflight.js, memory-reminder.js, ...
+ls .claude/bin/       # model-preflight.js, memory-reminder.js, graph-updater.js, ...
 ls .claude/memory/    # knowledge-graph.md, session-state.md
+ls .claude/functions/ # graph-store.js (SQLite 存储层), subgraph-query.js, ...
 ```
 
 ```bash
@@ -53,6 +54,8 @@ claude
 ```
 
 Claude Code 会自动加载 `CLAUDE.md` 中的启动契约。
+
+> **SQLite 图数据库**：导入器自动安装 `better-sqlite3` 并创建 `graph_memory.db`。如目标项目无 `package.json`，需先运行 `npm init -y && npm install better-sqlite3`。详见 [README-zh-CN.md](README-zh-CN.md#sqlite-图数据库)。
 
 ---
 
@@ -77,6 +80,18 @@ npx tt-b health
 ```
 
 预期输出：所有检查项显示绿色 ✓。
+
+```bash
+# 4. 如有问题，自动修复
+npx tt-b doctor
+```
+
+`doctor` 会自动安装缺失的 `better-sqlite3` 依赖并修复配置问题。
+
+如果遇到权限错误（macOS/Linux）：
+```bash
+sudo npx tt-b doctor
+```
 
 ---
 
@@ -138,6 +153,12 @@ node bin/tt-b-openclaw-install.js --status
 不管哪种安装方式，都可以用以下命令验证核心功能：
 
 ```bash
+# 综合健康检查（推荐）
+npx tt-b health
+
+# 自动诊断和修复
+npx tt-b doctor
+
 # 模型预检
 node .claude/bin/model-preflight.js --host claude --model claude-opus-4-7 --text
 # 预期: 宿主: claude / 模型: claude-opus-4-7 / 能力: architect_orchestrator
