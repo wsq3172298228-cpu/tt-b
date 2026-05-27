@@ -48,6 +48,15 @@ async function installToProject(targetDir) {
   info(`Source: ${root} (${source})`);
   spacer();
 
+  // Track what was done for rollback
+  const state = {
+    imported: false,
+    createdPkgJson: false,
+    sqliteInstalled: false,
+    hookMounted: false,
+    hookTarget: null,
+  };
+
   // Step 2: run importer
   const spinnerImport = new Spinner("Importing workflow files...").start();
   try {
@@ -56,6 +65,7 @@ async function installToProject(targetDir) {
       timeout: 60000,
     });
     spinnerImport.succeed("Workflow files imported");
+    state.imported = true;
     console.log(output);
   } catch (e) {
     spinnerImport.fail(`Import failed: ${e.message}`);
@@ -66,16 +76,19 @@ async function installToProject(targetDir) {
 
   // Step 3: ensure package.json exists
   const pkgJsonPath = path.join(resolvedTarget, "package.json");
-  if (!fileExists(pkgJsonPath)) {
+  const pkgJsonExisted = fileExists(pkgJsonPath);
+  if (!pkgJsonExisted) {
     warn("No package.json found in target project.");
     info("Running `npm init -y` to create one...");
     try {
       execSync("npm init -y", { cwd: resolvedTarget, encoding: "utf8", stdio: "pipe" });
       ok("package.json created");
+      state.createdPkgJson = true;
     } catch (e) {
       fail(`npm init failed: ${e.message}`);
-      warn("Skipping better-sqlite3 install. You can run `npm init -y && npm install better-sqlite3` manually.");
-      return await finishInstall(resolvedTarget);
+      warn("Rolling back imported files...");
+      rollback(state, resolvedTarget);
+      return false;
     }
   }
 
@@ -90,6 +103,7 @@ async function installToProject(targetDir) {
       timeout: 120000,
     });
     spinnerSqlite.succeed("better-sqlite3 installed");
+    state.sqliteInstalled = true;
     sqliteOk = true;
   } catch (e) {
     spinnerSqlite.fail("better-sqlite3 install failed");
@@ -108,12 +122,94 @@ async function installToProject(targetDir) {
   spacer();
 
   // Step 5: mount git post-commit hook
-  await mountGitHook(resolvedTarget);
+  const hookResult = await mountGitHook(resolvedTarget);
+  if (hookResult) {
+    state.hookMounted = true;
+    state.hookTarget = hookResult;
+  }
 
   spacer();
 
   // Step 6: verify
-  return await finishInstall(resolvedTarget, sqliteOk);
+  const success = await finishInstall(resolvedTarget, sqliteOk);
+
+  if (!success) {
+    warn("Verification failed. Rolling back all changes...");
+    rollback(state, resolvedTarget);
+  }
+
+  return success;
+}
+
+function rollback(state, targetDir) {
+  heading("Rolling back installation");
+
+  // Step 5 rollback: remove git hook
+  if (state.hookMounted && state.hookTarget) {
+    try {
+      if (fs.existsSync(state.hookTarget)) {
+        fs.unlinkSync(state.hookTarget);
+        ok("Removed git post-commit hook");
+      }
+    } catch (e) {
+      warn(`Failed to remove hook: ${e.message}`);
+    }
+  }
+
+  // Step 4 rollback: uninstall better-sqlite3
+  if (state.sqliteInstalled) {
+    try {
+      execSync("npm uninstall better-sqlite3", {
+        cwd: targetDir,
+        encoding: "utf8",
+        stdio: "pipe",
+        timeout: 60000,
+      });
+      ok("Uninstalled better-sqlite3");
+    } catch (e) {
+      warn(`Failed to uninstall better-sqlite3: ${e.message}`);
+    }
+  }
+
+  // Step 3 rollback: remove package.json only if we created it
+  if (state.createdPkgJson) {
+    const pkgPath = path.join(targetDir, "package.json");
+    const lockPath = path.join(targetDir, "package-lock.json");
+    try {
+      if (fs.existsSync(pkgPath)) fs.unlinkSync(pkgPath);
+      if (fs.existsSync(lockPath)) fs.unlinkSync(lockPath);
+      // remove node_modules if we created it
+      const nmPath = path.join(targetDir, "node_modules");
+      if (fs.existsSync(nmPath)) {
+        fs.rmSync(nmPath, { recursive: true, force: true });
+      }
+      ok("Removed generated package.json and node_modules");
+    } catch (e) {
+      warn(`Failed to remove package.json: ${e.message}`);
+    }
+  }
+
+  // Step 2 rollback: remove imported .claude/ and CLAUDE.md
+  if (state.imported) {
+    const claudeDir = path.join(targetDir, ".claude");
+    const claudeMd = path.join(targetDir, "CLAUDE.md");
+    try {
+      if (fs.existsSync(claudeDir)) {
+        fs.rmSync(claudeDir, { recursive: true, force: true });
+        ok("Removed .claude/ directory");
+      }
+      if (fs.existsSync(claudeMd)) {
+        fs.unlinkSync(claudeMd);
+        ok("Removed CLAUDE.md");
+      }
+    } catch (e) {
+      warn(`Failed to remove imported files: ${e.message}`);
+    }
+  }
+
+  spacer();
+  fail("Installation rolled back. No changes remain.");
+  info("To retry, run the install command again.");
 }
 
 async function mountGitHook(targetDir) {
@@ -123,13 +219,13 @@ async function mountGitHook(targetDir) {
   if (!gitDir) {
     warn("No git repository found. Skipping post-commit hook.");
     info("To mount later: cp .claude/bin/post-commit-hook.js .git/hooks/post-commit && chmod +x .git/hooks/post-commit");
-    return;
+    return null;
   }
 
   const hookSource = path.join(targetDir, ".claude", "bin", "post-commit-hook.js");
   if (!fileExists(hookSource)) {
     warn("post-commit-hook.js not found. Skipping hook mount.");
-    return;
+    return null;
   }
 
   const hookTarget = path.join(gitDir, "hooks", "post-commit");
@@ -143,7 +239,7 @@ async function mountGitHook(targetDir) {
     if (!answer) {
       info("Skipped hook mount.");
       info(`To mount later: cp .claude/bin/post-commit-hook.js ${gitDir}/hooks/post-commit`);
-      return;
+      return null;
     }
   }
 
@@ -156,9 +252,11 @@ async function mountGitHook(targetDir) {
     fs.copyFileSync(hookSource, hookTarget);
     fs.chmodSync(hookTarget, 0o755);
     ok("Git post-commit hook mounted");
+    return hookTarget;
   } catch (e) {
     warn(`Hook mount failed: ${e.message}`);
     info(`To mount manually: cp .claude/bin/post-commit-hook.js ${gitDir}/hooks/post-commit && chmod +x ${gitDir}/hooks/post-commit`);
+    return null;
   }
 }
 
