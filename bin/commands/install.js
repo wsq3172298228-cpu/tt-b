@@ -55,9 +55,18 @@ async function installToProject(targetDir) {
     sqliteInstalled: false,
     hookMounted: false,
     hookTarget: null,
+    backupDir: null,
+    backupClaudeMd: null,
   };
 
-  // Step 2: run importer
+  // Step 2: backup existing configs
+  const backupResult = await backupExistingConfigs(resolvedTarget);
+  if (backupResult) {
+    state.backupDir = backupResult.claudeDir;
+    state.backupClaudeMd = backupResult.claudeMd;
+  }
+
+  // Step 3: run importer
   const spinnerImport = new Spinner("Importing workflow files...").start();
   try {
     const output = execSync(`node "${deployScript}" "${resolvedTarget}" --force`, {
@@ -122,6 +131,86 @@ async function installToProject(targetDir) {
   }
 
   return success;
+}
+
+async function backupExistingConfigs(targetDir) {
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const backupRoot = path.join(targetDir, ".tt-b-backups", timestamp);
+  const claudeDir = path.join(targetDir, ".claude");
+  const claudeMd = path.join(targetDir, "CLAUDE.md");
+
+  const hasClaudeDir = fs.existsSync(claudeDir);
+  const hasClaudeMd = fs.existsSync(claudeMd);
+
+  if (!hasClaudeDir && !hasClaudeMd) {
+    return null;
+  }
+
+  heading("Backing up existing configuration");
+
+  try {
+    fs.mkdirSync(backupRoot, { recursive: true });
+
+    const result = { claudeDir: null, claudeMd: null };
+
+    if (hasClaudeDir) {
+      const dest = path.join(backupRoot, ".claude");
+      fs.cpSync(claudeDir, dest, { recursive: true });
+      result.claudeDir = dest;
+      ok(`Backed up .claude/ → ${path.relative(targetDir, dest)}`);
+    }
+
+    if (hasClaudeMd) {
+      const dest = path.join(backupRoot, "CLAUDE.md");
+      fs.copyFileSync(claudeMd, dest);
+      result.claudeMd = dest;
+      ok(`Backed up CLAUDE.md → ${path.relative(targetDir, dest)}`);
+    }
+
+    spacer();
+    info(`Backup location: ${path.relative(targetDir, backupRoot)}`);
+    spacer();
+
+    return result;
+  } catch (e) {
+    fail(`Backup failed: ${e.message}`);
+    const proceed = await confirm("Continue installation without backup?", { default: false });
+    if (!proceed) {
+      fail("Installation aborted.");
+      return null;
+    }
+    return null;
+  }
+}
+
+function restoreBackup(state, targetDir) {
+  if (!state.backupDir && !state.backupClaudeMd) return;
+
+  heading("Restoring from backup");
+
+  const claudeDir = path.join(targetDir, ".claude");
+  const claudeMd = path.join(targetDir, "CLAUDE.md");
+
+  // Remove what we installed
+  if (fs.existsSync(claudeDir)) {
+    fs.rmSync(claudeDir, { recursive: true, force: true });
+  }
+  if (fs.existsSync(claudeMd)) {
+    fs.unlinkSync(claudeMd);
+  }
+
+  // Restore from backup
+  if (state.backupDir && fs.existsSync(state.backupDir)) {
+    fs.cpSync(state.backupDir, claudeDir, { recursive: true });
+    ok("Restored .claude/ from backup");
+  }
+
+  if (state.backupClaudeMd && fs.existsSync(state.backupClaudeMd)) {
+    fs.copyFileSync(state.backupClaudeMd, claudeMd);
+    ok("Restored CLAUDE.md from backup");
+  }
+
+  spacer();
 }
 
 async function installSqlite(targetDir, state) {
@@ -238,21 +327,25 @@ function rollback(state, targetDir) {
     }
   }
 
-  // Step 2 rollback: remove imported .claude/ and CLAUDE.md
+  // Step 3 rollback: restore or remove imported .claude/ and CLAUDE.md
   if (state.imported) {
-    const claudeDir = path.join(targetDir, ".claude");
-    const claudeMd = path.join(targetDir, "CLAUDE.md");
-    try {
-      if (fs.existsSync(claudeDir)) {
-        fs.rmSync(claudeDir, { recursive: true, force: true });
-        ok("Removed .claude/ directory");
+    if (state.backupDir || state.backupClaudeMd) {
+      restoreBackup(state, targetDir);
+    } else {
+      const claudeDir = path.join(targetDir, ".claude");
+      const claudeMd = path.join(targetDir, "CLAUDE.md");
+      try {
+        if (fs.existsSync(claudeDir)) {
+          fs.rmSync(claudeDir, { recursive: true, force: true });
+          ok("Removed .claude/ directory");
+        }
+        if (fs.existsSync(claudeMd)) {
+          fs.unlinkSync(claudeMd);
+          ok("Removed CLAUDE.md");
+        }
+      } catch (e) {
+        warn(`Failed to remove imported files: ${e.message}`);
       }
-      if (fs.existsSync(claudeMd)) {
-        fs.unlinkSync(claudeMd);
-        ok("Removed CLAUDE.md");
-      }
-    } catch (e) {
-      warn(`Failed to remove imported files: ${e.message}`);
     }
   }
 
@@ -401,4 +494,59 @@ function installGlobal() {
   }
 }
 
-module.exports = { installProject, installGlobal, installToProject };
+async function restoreFromBackup(targetDir) {
+  const resolvedTarget = path.resolve(targetDir);
+  const backupRoot = path.join(resolvedTarget, ".tt-b-backups");
+
+  if (!fs.existsSync(backupRoot)) {
+    fail("No backups found in this project.");
+    info("Backups are created automatically during installation.");
+    return false;
+  }
+
+  // List available backups
+  const backups = fs.readdirSync(backupRoot)
+    .filter((d) => fs.statSync(path.join(backupRoot, d)).isDirectory())
+    .sort()
+    .reverse();
+
+  if (backups.length === 0) {
+    fail("No backups found.");
+    return false;
+  }
+
+  heading("Available backups");
+  backups.forEach((b, i) => {
+    info(`  ${i + 1}. ${b}`);
+  });
+  spacer();
+
+  const choice = await prompt("Select backup to restore (number):", {});
+  const idx = parseInt(choice, 10) - 1;
+
+  if (isNaN(idx) || idx < 0 || idx >= backups.length) {
+    fail("Invalid selection.");
+    return false;
+  }
+
+  const selected = backups[idx];
+  const backupPath = path.join(backupRoot, selected);
+
+  heading(`Restoring backup: ${selected}`);
+
+  const state = {
+    backupDir: fs.existsSync(path.join(backupPath, ".claude")) ? path.join(backupPath, ".claude") : null,
+    backupClaudeMd: fs.existsSync(path.join(backupPath, "CLAUDE.md")) ? path.join(backupPath, "CLAUDE.md") : null,
+  };
+
+  if (!state.backupDir && !state.backupClaudeMd) {
+    fail("Selected backup is empty.");
+    return false;
+  }
+
+  restoreBackup(state, resolvedTarget);
+  ok("Restore complete!");
+  return true;
+}
+
+module.exports = { installProject, installGlobal, installToProject, restoreBackup: restoreFromBackup };

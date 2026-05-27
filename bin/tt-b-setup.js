@@ -19,7 +19,7 @@ const { c, heading, spacer, box, prompt, info, warn, fail, ok } = require("./lib
 const { checkNodeVersion } = require("./lib/utils");
 const { getPackageVersion } = require("./lib/repo");
 const { healthCheck } = require("./commands/health");
-const { installProject, installGlobal, installToProject } = require("./commands/install");
+const { installProject, installGlobal, installToProject, restoreBackup } = require("./commands/install");
 const { upgrade } = require("./commands/upgrade");
 const { uninstall } = require("./commands/uninstall");
 const { doctor } = require("./commands/doctor");
@@ -50,6 +50,7 @@ async function interactive() {
       { label: "Install to current project (with SQLite graph)", value: "project" },
       { label: "Install to specific project path (with SQLite graph)", value: "specific" },
       { label: "Health check", value: "health" },
+      { label: "Restore from backup", value: "restore" },
       { label: "Uninstall", value: "uninstall" },
       { label: "Exit", value: "exit" },
     ],
@@ -76,6 +77,9 @@ async function interactive() {
       break;
     case "health":
       healthCheck({ verbose: true });
+      break;
+    case "restore":
+      await restoreBackup(process.cwd());
       break;
     case "uninstall":
       uninstall();
@@ -147,6 +151,11 @@ async function main() {
       doctor();
       break;
 
+    case "restore":
+      const restorePath = args.slice(1).find((a) => !a.startsWith("-"));
+      restoreBackup(restorePath || process.cwd());
+      break;
+
     case "version":
     case "--version":
     case "-v":
@@ -182,6 +191,7 @@ ${c.bold}Usage:${c.reset}
   npx tt-b uninstall          Remove tt-b files
   npx tt-b health             Health check
   npx tt-b doctor             Diagnose and auto-fix issues
+  npx tt-b restore            Restore config from backup
   npx tt-b version            Show version
 
 ${c.bold}Options:${c.reset}
