@@ -198,6 +198,15 @@ tt-b-stream --timeout 120 --max-retries 5 -- --prompt "Your prompt here"
 tt-b-stream --verbose --log /tmp/claude-monitor.log -- --prompt "Your prompt here"
 ```
 
+**Default Configuration:**
+
+After installing tt-b, a default config file `.claude/stream-monitor.json` is created with:
+- Timeout: 60 seconds
+- Max retries: 3
+- Retry delay: 2000 ms
+
+Just run `tt-b-stream` to use the default configuration without specifying parameters.
+
 **Features:**
 - **Real-time stream monitoring**: Capture Claude Code's stdout/stderr output
 - **Idle timeout detection**: Default 60s timeout triggers circuit breaker
@@ -213,6 +222,20 @@ tt-b-stream --verbose --log /tmp/claude-monitor.log -- --prompt "Your prompt her
 | `--retry-delay <ms>` | Delay between retries (ms) | 2000 |
 | `--log <file>` | Log file path | none |
 | `--verbose, -v` | Enable verbose logging | off |
+
+**Config File (`.claude/stream-monitor.json`):**
+
+```json
+{
+  "timeout": 60,
+  "maxRetries": 3,
+  "retryDelay": 2000,
+  "verbose": false,
+  "logFile": null
+}
+```
+
+**Priority**: Command-line args > Environment vars > Config file > Defaults
 
 **Environment Variables:**
 

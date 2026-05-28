@@ -23,6 +23,7 @@
     "packages/",
     "templates/",
     ".claude/bin/",
+    ".claude/stream-monitor.json",
     "plugin/",
     ".claude-plugin/",
     ".codex-plugin/"

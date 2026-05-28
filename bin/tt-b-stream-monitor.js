@@ -33,9 +33,41 @@ const DEFAULTS = {
   logFile: null,
 };
 
+const CONFIG_FILE = ".claude/stream-monitor.json";
+
+function loadConfigFile() {
+  // Try to find config file in current directory or project root
+  const possiblePaths = [
+    path.resolve(CONFIG_FILE),
+    path.join(process.env.HOME || "", ".claude", "stream-monitor.json"),
+  ];
+
+  for (const configPath of possiblePaths) {
+    try {
+      if (fs.existsSync(configPath)) {
+        const content = fs.readFileSync(configPath, "utf8");
+        const config = JSON.parse(content);
+        return { config, path: configPath };
+      }
+    } catch {
+      // Ignore parse errors
+    }
+  }
+
+  return { config: {}, path: null };
+}
+
 function parseArgs(argv) {
   const args = argv.slice(2);
-  const config = { ...DEFAULTS, claudeArgs: [] };
+
+  // Load config from file first
+  const { config: fileConfig, path: configPath } = loadConfigFile();
+  const config = { ...DEFAULTS, ...fileConfig, claudeArgs: [] };
+
+  if (configPath) {
+    config._configFile = configPath;
+  }
+
   let i = 0;
 
   while (i < args.length) {
@@ -64,7 +96,7 @@ function parseArgs(argv) {
     i++;
   }
 
-  // Override with env vars
+  // Override with env vars (highest priority)
   if (process.env.STREAM_TIMEOUT) {
     config.timeout = parseInt(process.env.STREAM_TIMEOUT, 10);
   }
@@ -100,6 +132,18 @@ Options:
   --verbose, -v          Enable verbose logging
   --help, -h             Show this help
 
+Configuration File:
+  Reads .claude/stream-monitor.json if present. Example:
+  {
+    "timeout": 60,
+    "maxRetries": 3,
+    "retryDelay": 2000,
+    "verbose": false,
+    "logFile": null
+  }
+
+  Priority: Command-line args > Environment vars > Config file > Defaults
+
 Environment:
   STREAM_TIMEOUT         Override timeout (seconds)
   MAX_RETRIES            Override max retries
@@ -108,14 +152,14 @@ Environment:
   VERBOSE                Set to "1" for verbose output
 
 Examples:
-  # Monitor with default 60s timeout
-  tt-b-stream-monitor --prompt "Hello"
+  # Monitor with default 60s timeout (reads config from .claude/stream-monitor.json)
+  tt-b-stream --prompt "Hello"
 
   # Custom timeout and retries
-  tt-b-stream-monitor --timeout 120 --max-retries 5 -- --prompt "Hello"
+  tt-b-stream --timeout 120 --max-retries 5 -- --prompt "Hello"
 
   # With logging
-  tt-b-stream-monitor --log /tmp/claude-monitor.log -- --prompt "Hello"
+  tt-b-stream --log /tmp/claude-monitor.log -- --prompt "Hello"
 `);
 }
 
@@ -220,6 +264,7 @@ class StreamMonitor {
       args,
       timeout: this.config.timeout,
       maxRetries: this.config.maxRetries,
+      configFile: this.config._configFile || "none",
     });
 
     this._spawnProcess(claudePath, args);

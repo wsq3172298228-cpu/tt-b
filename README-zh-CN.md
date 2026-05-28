@@ -134,6 +134,15 @@ tt-b-stream --timeout 120 --max-retries 5 -- --prompt "Your prompt here"
 tt-b-stream --verbose --log /tmp/claude-monitor.log -- --prompt "Your prompt here"
 ```
 
+**默认配置：**
+
+安装 tt-b 后，会自动创建 `.claude/stream-monitor.json` 配置文件，默认配置为：
+- 超时时间：60 秒
+- 最大重试次数：3 次
+- 重试间隔：2000 毫秒
+
+直接运行 `tt-b-stream` 即可使用默认配置，无需手动指定参数。
+
 **功能特性：**
 - **实时流式监控**：捕获 Claude Code 的 stdout/stderr 输出
 - **断流超时检测**：默认 60 秒无输出触发熔断
@@ -149,6 +158,20 @@ tt-b-stream --verbose --log /tmp/claude-monitor.log -- --prompt "Your prompt her
 | `--retry-delay <ms>` | 重试间隔（毫秒） | 2000 |
 | `--log <file>` | 日志文件路径 | 无 |
 | `--verbose, -v` | 启用详细日志 | 关闭 |
+
+**配置文件（`.claude/stream-monitor.json`）：**
+
+```json
+{
+  "timeout": 60,
+  "maxRetries": 3,
+  "retryDelay": 2000,
+  "verbose": false,
+  "logFile": null
+}
+```
+
+**优先级**：命令行参数 > 环境变量 > 配置文件 > 默认值
 
 **环境变量：**
 

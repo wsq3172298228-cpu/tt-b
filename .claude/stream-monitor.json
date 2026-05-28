@@ -1,0 +1,7 @@
+{
+  "timeout": 60,
+  "maxRetries": 3,
+  "retryDelay": 2000,
+  "verbose": false,
+  "logFile": null
+}
