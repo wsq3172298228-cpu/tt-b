@@ -183,6 +183,53 @@ node bin/tt-b-cleanup.js /path/to/target-project --force
 Without `--force`, memory files containing real project data and non-pointer
 legacy files are kept. With `--force`, everything tt-b related is removed.
 
+### Stream Monitor
+
+`tt-b-stream` provides real-time stream health monitoring and circuit breaker for Claude Code.
+
+```bash
+# Basic usage: monitor Claude Code and interrupt after 60s of no output
+tt-b-stream --prompt "Your prompt here"
+
+# Custom timeout and retries
+tt-b-stream --timeout 120 --max-retries 5 -- --prompt "Your prompt here"
+
+# Enable verbose logging
+tt-b-stream --verbose --log /tmp/claude-monitor.log -- --prompt "Your prompt here"
+```
+
+**Features:**
+- **Real-time stream monitoring**: Capture Claude Code's stdout/stderr output
+- **Idle timeout detection**: Default 60s timeout triggers circuit breaker
+- **Auto-retry**: Configurable max retry attempts (default: 3)
+- **Detailed logging**: Optional log file and verbose mode
+
+**Configuration Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--timeout <seconds>` | Idle timeout threshold (seconds) | 60 |
+| `--max-retries <n>` | Maximum retry attempts | 3 |
+| `--retry-delay <ms>` | Delay between retries (ms) | 2000 |
+| `--log <file>` | Log file path | none |
+| `--verbose, -v` | Enable verbose logging | off |
+
+**Environment Variables:**
+
+| Variable | Description |
+|----------|-------------|
+| `STREAM_TIMEOUT` | Override timeout (seconds) |
+| `MAX_RETRIES` | Override max retries |
+| `RETRY_DELAY` | Override retry delay (ms) |
+| `LOG_FILE` | Override log file path |
+| `VERBOSE` | Set to "1" for verbose output |
+
+**Use Cases:**
+- Prevent AI reasoning loops
+- Detect network hangs
+- Avoid wasted token consumption
+- Auto-recover from abnormal sessions
+
 ## Install from GitHub
 
 You can import the workflow with the click of a command:

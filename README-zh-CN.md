@@ -119,6 +119,53 @@ node bin/tt-b-openclaw-install.js --status
 | Codex CLI | `node bin/tt-b-codex-install.js --remove` |
 | OpenClaw | `node bin/tt-b-openclaw-install.js --remove` |
 
+### 流式监控器（Stream Monitor）
+
+`tt-b-stream` 为 Claude Code 提供实时流式输出监控与异常中断机制（Circuit Breaker）。
+
+```bash
+# 基本用法：监控 Claude Code 并在 60 秒无输出时中断
+tt-b-stream --prompt "Your prompt here"
+
+# 自定义超时和重试次数
+tt-b-stream --timeout 120 --max-retries 5 -- --prompt "Your prompt here"
+
+# 启用详细日志
+tt-b-stream --verbose --log /tmp/claude-monitor.log -- --prompt "Your prompt here"
+```
+
+**功能特性：**
+- **实时流式监控**：捕获 Claude Code 的 stdout/stderr 输出
+- **断流超时检测**：默认 60 秒无输出触发熔断
+- **自动重试**：支持配置最大重试次数（默认 3 次）
+- **详细日志**：可选的日志文件和 verbose 模式
+
+**配置选项：**
+
+| 选项 | 说明 | 默认值 |
+|------|------|--------|
+| `--timeout <seconds>` | 断流超时阈值（秒） | 60 |
+| `--max-retries <n>` | 最大重试次数 | 3 |
+| `--retry-delay <ms>` | 重试间隔（毫秒） | 2000 |
+| `--log <file>` | 日志文件路径 | 无 |
+| `--verbose, -v` | 启用详细日志 | 关闭 |
+
+**环境变量：**
+
+| 变量 | 说明 |
+|------|------|
+| `STREAM_TIMEOUT` | 覆盖超时设置（秒） |
+| `MAX_RETRIES` | 覆盖最大重试次数 |
+| `RETRY_DELAY` | 覆盖重试间隔（毫秒） |
+| `LOG_FILE` | 覆盖日志文件路径 |
+| `VERBOSE` | 设为 "1" 启用详细日志 |
+
+**使用场景：**
+- 防止 AI 进入推理死循环
+- 检测网络假死状态
+- 避免无谓的 Token 消耗
+- 自动恢复异常会话
+
 ---
 
 ## 一键导入
