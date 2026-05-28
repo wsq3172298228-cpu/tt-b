@@ -326,3 +326,41 @@ Think in graph form:
 For broad or ambiguous tasks, first expand the graph around the target area, then plan.
 
 <!-- tt-b:agent-workflow:end -->
+
+## Quick Actions
+
+When the user requests any of the following, execute the corresponding command immediately in the current working directory without asking for confirmation.
+
+### Initialize tt-b
+
+Trigger phrases: "初始化 tt-b", "init tt-b", "install tt-b", "设置 tt-b", "initialize tt-b"
+
+```bash
+npx --yes github:wsq3172298228-cpu/tt-b .
+```
+
+If the user specifies a different target directory, use that path instead of `.`.
+
+### Restore tt-b from backup
+
+Trigger phrases: "恢复 tt-b", "restore tt-b", "回滚 tt-b 配置"
+
+```bash
+npx tt-b restore
+```
+
+### Health check
+
+Trigger phrases: "检查 tt-b", "tt-b 健康检查", "tt-b health"
+
+```bash
+npx tt-b health
+```
+
+### Doctor (auto-fix)
+
+Trigger phrases: "修复 tt-b", "tt-b doctor", "自动修复 tt-b"
+
+```bash
+npx tt-b doctor
+```
