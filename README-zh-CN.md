@@ -341,6 +341,53 @@ node bin/tt-b-cleanup.js /path/to/target-project --force
 
 不使用 `--force` 时，包含真实项目数据的记忆文件和非指针兼容性文件会被保留。使用 `--force` 时，所有 tt-b 相关内容都会被移除。
 
+## TTB-TODO 注释规范
+
+修改代码时，先写注释作为"思维锚点"：
+
+```javascript
+//TTB-TODO: 步骤 1: 验证用户输入
+//TTB-TODO: 步骤 2: 检查权限
+//TTB-TODO: 步骤 3: 处理业务逻辑
+
+// 实际代码...
+```
+
+**优势：**
+- 为 AI 提供缓冲区，先理顺逻辑再写代码
+- 建立强上下文锚点，约束后续代码生成
+- 降低误改无关代码的风险
+
+TTB-TODO 注释会被自动追踪，可通过 `ttb_todos_list` MCP 工具查询。
+
+## Diff Guard（用户通知）
+
+监控代码变更，通知**用户**（不阻止 AI）：
+
+| 变更 | 通知 |
+|------|------|
+| Edit > 50 行 | 用户通知 |
+| Edit > 100 行 | 用户警告 |
+| Write 替换 > 50% | 用户通知 |
+| Write 替换 > 80% | 用户警告 |
+
+**理念：** AI 专注执行，用户负责监督。
+
+## AST 文件指针
+
+基于语法树的精准代码导航：
+
+```javascript
+// MCP 工具用法
+ttb_file_pointer({
+  filePath: "src/index.js",
+  focus: "handleRequest",  // 聚焦特定函数
+  contextLines: 5          // 上下文行数
+})
+```
+
+支持：JavaScript、TypeScript、Python、Markdown。
+
 ## 从 GitHub 安装
 
 可以一键导入工作流：

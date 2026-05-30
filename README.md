@@ -183,6 +183,53 @@ node bin/tt-b-cleanup.js /path/to/target-project --force
 Without `--force`, memory files containing real project data and non-pointer
 legacy files are kept. With `--force`, everything tt-b related is removed.
 
+## TTB-TODO Comment Convention
+
+When modifying code, write comments first as "thinking anchors":
+
+```javascript
+//TTB-TODO: 步骤 1: 验证用户输入
+//TTB-TODO: 步骤 2: 检查权限
+//TTB-TODO: 步骤 3: 处理业务逻辑
+
+// Actual code follows...
+```
+
+**Benefits:**
+- Provides a "buffer zone" for AI to organize logic before coding
+- Creates strong context anchors that constrain subsequent code generation
+- Reduces risk of accidentally modifying unrelated code
+
+TTB-TODO comments are automatically tracked and queryable via `ttb_todos_list` MCP tool.
+
+## Diff Guard
+
+Monitors code changes and notifies the USER (not blocks the AI):
+
+| Change | Notification |
+|--------|--------------|
+| Edit > 50 lines | User notification |
+| Edit > 100 lines | User alert |
+| Write replaces > 50% | User notification |
+| Write replaces > 80% | User alert |
+
+**Philosophy:** AI should focus on execution, user handles oversight.
+
+## AST File Pointer
+
+Surgical code navigation using AST-based parsing:
+
+```javascript
+// MCP tool usage
+ttb_file_pointer({
+  filePath: "src/index.js",
+  focus: "handleRequest",  // Focus on specific function
+  contextLines: 5          // Lines of context
+})
+```
+
+Supports: JavaScript, TypeScript, Python, Markdown.
+
 ### Stream Monitor
 
 `tt-b-stream` provides real-time stream health monitoring and circuit breaker for Claude Code.

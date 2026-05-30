@@ -37,6 +37,17 @@ function createMcpHandler({ provider, config, searchIndexData }) {
     { name: "tt-b_memory_diff", description: "Diff a memory file against old content.", inputSchema: { type: "object", properties: { name: { type: "string" }, oldContent: { type: "string" } }, required: ["name", "oldContent"], additionalProperties: false } },
     { name: "tt-b_memory_restore", description: "Restore memory from a snapshot.", inputSchema: { type: "object", properties: { snapshot: { type: "object" } }, required: ["snapshot"], additionalProperties: false } },
     { name: "tt-b_memory_subgraph", description: "Get dependency subgraph for a node. Returns upstream/downstream dependencies within N hops in LLM-friendly text. Avoids micro-level node traversal.", inputSchema: { type: "object", properties: { entity: { type: "string", description: "Target node name (e.g., importer, Module:importer)" }, depth: { type: "number", description: "Max hops (1-5, default 3)" }, direction: { type: "string", enum: ["upstream", "downstream", "both"], description: "Exploration direction (default both)" } }, required: ["entity"], additionalProperties: false } },
+    // GML workflow tools
+    { name: "ttb_workflow_check", description: "Check if a task is non-trivial and return GML steps to execute.", inputSchema: { type: "object", properties: { task: { type: "object", properties: { fileCount: { type: "number" }, touchesBusinessLogic: { type: "boolean" }, requiresDependencies: { type: "boolean" }, securitySensitive: { type: "boolean" } } } }, required: ["task"], additionalProperties: false } },
+    { name: "ttb_evidence_validate", description: "Validate an evidence report against the GML contract.", inputSchema: { type: "object", properties: { evidence: { type: "object", properties: { filesInspected: { type: "array", items: { type: "string" } }, filesChanged: { type: "array", items: { type: "string" } }, commandsExecuted: { type: "array", items: { type: "string" } }, testsRun: { type: "array", items: { type: "string" } }, checkResults: { type: "string" }, confidence: { type: "string", enum: ["High", "Medium", "Low"] }, summary: { type: "string" } } } }, required: ["evidence"], additionalProperties: false } },
+    { name: "ttb_takeover_check", description: "Determine if Main Agent should take over from a subagent.", inputSchema: { type: "object", properties: { context: { type: "object", properties: { vagueConclusion: { type: "boolean" }, missingEvidence: { type: "boolean" }, securitySensitive: { type: "boolean" }, scopeChanged: { type: "boolean" }, testsFailed: { type: "boolean" }, unverifiable: { type: "boolean" } } } }, required: ["context"], additionalProperties: false } },
+    { name: "ttb_done_check", description: "Check if a task meets the GML Definition of Done.", inputSchema: { type: "object", properties: { task: { type: "object", properties: { goalSatisfied: { type: "boolean" }, checksPassed: { type: "boolean" }, evidenceApproved: { type: "boolean" }, risksStated: { type: "boolean" }, unrelatedChanges: { type: "boolean" }, orphanProcesses: { type: "boolean" } } } }, required: ["task"], additionalProperties: false } },
+    { name: "ttb_delegate_validate", description: "Validate a task delegation prompt.", inputSchema: { type: "object", properties: { delegation: { type: "object", properties: { objective: { type: "string" }, scope: { type: "array", items: { type: "string" } }, constraints: { type: "string" }, expectedOutput: { type: "string" } } } }, required: ["delegation"], additionalProperties: false } },
+    { name: "ttb_capability_route", description: "Return execution strategy based on model capability.", inputSchema: { type: "object", properties: { capability: { type: "string", enum: ["architect_orchestrator", "engineering_executor", "reader_or_tester", "unknown"] } }, required: ["capability"], additionalProperties: false } },
+    { name: "ttb_memory_recover", description: "Execute memory recovery protocol and return structured context.", inputSchema: { type: "object", properties: {}, additionalProperties: false } },
+    { name: "ttb_graph_expand", description: "Expand knowledge graph nodes around a target entity for planning.", inputSchema: { type: "object", properties: { entity: { type: "string", description: "Target entity name" }, depth: { type: "number", description: "Expansion depth (default 1)" } }, required: ["entity"], additionalProperties: false } },
+    { name: "ttb_file_pointer", description: "AST-based file pointer. Parse code structure and focus on specific functions/classes without reading entire file.", inputSchema: { type: "object", properties: { filePath: { type: "string", description: "File path to analyze" }, focus: { type: "string", description: "Function/class name to focus on" }, contextLines: { type: "number", description: "Lines of context around focus (default 5)" } }, required: ["filePath"], additionalProperties: false } },
+    { name: "ttb_todos_list", description: "List all registered TTB-TODO comments (context anchors).", inputSchema: { type: "object", properties: { file: { type: "string", description: "Filter by file path (optional)" } }, additionalProperties: false } },
   ];
 
   function handleToolCall(name, args) {
@@ -86,6 +97,39 @@ function createMcpHandler({ provider, config, searchIndexData }) {
       case "tt-b_memory_subgraph": {
         const content = provider.readText(config.memoryMap.knowledgeGraph);
         return wrap(fn.subgraphQuery({ content, entity: args.entity, depth: args.depth, direction: args.direction, projectRoot: config.projectRoot }));
+      }
+      // GML workflow tools
+      case "ttb_workflow_check":
+        return wrap(fn.workflowCheck({ task: args.task }));
+      case "ttb_evidence_validate":
+        return wrap(fn.evidenceValidate({ evidence: args.evidence }));
+      case "ttb_takeover_check":
+        return wrap(fn.takeoverCheck({ context: args.context }));
+      case "ttb_done_check":
+        return wrap(fn.doneCheck({ task: args.task }));
+      case "ttb_delegate_validate":
+        return wrap(fn.delegateValidate({ delegation: args.delegation }));
+      case "ttb_capability_route":
+        return wrap(fn.capabilityRoute({ capability: args.capability }));
+      case "ttb_memory_recover":
+        return wrap(fn.memoryRecover({ readText: provider.readText, memoryMap: config.memoryMap }));
+      case "ttb_graph_expand": {
+        const content = provider.readText(config.memoryMap.knowledgeGraph);
+        return wrap(fn.graphExpand({ content, entity: args.entity, depth: args.depth }));
+      }
+      case "ttb_file_pointer": {
+        const absPath = provider.resolve(args.filePath);
+        return wrap(fn.filePointer({ filePath: absPath, focus: args.focus, contextLines: args.contextLines }));
+      }
+      case "ttb_todos_list": {
+        const todosPath = provider.resolve(".claude/memory/ttb-todos.json");
+        try {
+          const todos = JSON.parse(provider.readText(".claude/memory/ttb-todos.json") || "[]");
+          const filtered = args.file ? todos.filter((t) => t.file.includes(args.file)) : todos;
+          return wrap({ count: filtered.length, todos: filtered });
+        } catch {
+          return wrap({ count: 0, todos: [] });
+        }
       }
       default:
         return err("Unknown tool: " + name);

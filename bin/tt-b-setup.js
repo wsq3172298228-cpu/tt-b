@@ -4,7 +4,7 @@
  * tt-b-setup.js — One-click installer for tt-b agent workflow kit
  *
  * Usage:
- *   npx tt-b                          # interactive install
+ *   npx tt-b                          # interactive: shows current dir, choose local/global/cancel
  *   npx tt-b install                  # install to current project
  *   npx tt-b install /path/to/proj    # install to specific project (with SQLite graph)
  *   npx tt-b install --global         # deploy to ~/.claude/
@@ -29,63 +29,52 @@ const VERSION = getPackageVersion() || require("../package.json").version;
 
 // ─── Interactive Mode ───
 
+function getCurrentDir() {
+  return process.cwd();
+}
+
+function getDirBasename(dir) {
+  const parts = dir.replace(/\/+$/, "").split("/");
+  return parts[parts.length - 1] || dir;
+}
+
 async function interactive() {
+  const currentDir = getCurrentDir();
+  const dirName = getDirBasename(currentDir);
+
   box(
     [
       `${c.bold}tt-b Agent Workflow Kit${c.reset}`,
       `v${VERSION} — Model-aware Claude Code`,
       "",
-      "8 hooks · 12 MCP tools · 10+ skills",
+      `Current directory: ${c.cyan}${currentDir}${c.reset}`,
     ],
     { title: PKG_NAME }
   );
 
   spacer();
-  info("What would you like to do?");
-  spacer();
 
-  const choice = await prompt("", {
+  const choice = await prompt("Where to install?", {
     choices: [
-      { label: "Install to ~/.claude/ (global)", value: "global", recommended: true },
-      { label: "Install to current project (with SQLite graph)", value: "project" },
-      { label: "Install to specific project path (with SQLite graph)", value: "specific" },
-      { label: "Health check", value: "health" },
-      { label: "Restore from backup", value: "restore" },
-      { label: "Uninstall", value: "uninstall" },
-      { label: "Exit", value: "exit" },
+      { label: `Install to current project (${c.cyan}${dirName}${c.reset})`, value: "project", recommended: true },
+      { label: "Install to ~/.claude/ (global)", value: "global" },
+      { label: "Cancel", value: "exit" },
     ],
   });
 
   spacer();
 
   switch (choice) {
+    case "project":
+      await installToProject(currentDir);
+      break;
     case "global":
       installGlobal();
       spacer();
       healthCheck();
       break;
-    case "project":
-      installProject();
-      break;
-    case "specific":
-      const targetPath = await prompt("Enter target project path:");
-      if (targetPath) {
-        await installToProject(targetPath);
-      } else {
-        warn("No path provided.");
-      }
-      break;
-    case "health":
-      healthCheck({ verbose: true });
-      break;
-    case "restore":
-      await restoreBackup(process.cwd());
-      break;
-    case "uninstall":
-      uninstall();
-      break;
     case "exit":
-      console.log("Bye!");
+      info("Cancelled.");
       break;
     default:
       warn("Invalid choice. Run `npx tt-b` again.");
@@ -95,10 +84,9 @@ async function interactive() {
 // ─── Non-Interactive Mode ───
 
 function nonInteractive() {
-  info("Non-interactive mode: installing globally...");
-  installGlobal();
-  spacer();
-  healthCheck();
+  const currentDir = getCurrentDir();
+  info(`Non-interactive mode: installing to ${currentDir}...`);
+  installToProject(currentDir);
 }
 
 // ─── CLI ───
@@ -183,7 +171,7 @@ function showHelp() {
 ${c.bold}${c.cyan}tt-b${c.reset} v${VERSION} — Model-aware agent workflow kit
 
 ${c.bold}Usage:${c.reset}
-  npx tt-b                    Interactive setup
+  npx tt-b                    Interactive setup (shows current dir, choose local/global/cancel)
   npx tt-b install            Install to current project
   npx tt-b install /path/to/proj  Install to specific project (with SQLite graph)
   npx tt-b install --global   Deploy to ~/.claude/
@@ -223,8 +211,8 @@ ${c.bold}Build tools (for better-sqlite3):${c.reset}
   • Windows: npm install --global windows-build-tools
 
 ${c.bold}Backups:${c.reset}
-  Every install backs up existing ~/.claude/ files.
-  Restore:  npx tt-b doctor
+  Every install backs up existing configs before applying new ones.
+  Restore:  npx tt-b restore
   Backups:  ~/.claude/backups/tt-b/
 `);
 }

@@ -3,10 +3,9 @@
 /**
  * Memory auto-compression hook for Claude Code.
  *
- * Triggers on context compaction (compact event) and compresses
- * knowledge-graph.md by removing redundant edges and collapsing
- * stable sections, while preserving session-state.md as-is
- * (it should stay lean by convention).
+ * Triggers on context compaction (compact event) and compresses:
+ * 1. knowledge-graph.md — remove redundant edges, collapse stale sections
+ * 2. session-state.md — archive old activity, keep only current state
  *
  * Backup strategy: creates a timestamped backup before any mutation.
  */
@@ -196,6 +195,84 @@ function compressKnowledgeGraph(projectRoot) {
   return { compressed: true, linesBefore, linesAfter, backupPath };
 }
 
+/**
+ * Compress session-state.md by archiving old activity and keeping only current state.
+ */
+function compressSessionState(projectRoot) {
+  const ssPath = path.join(projectRoot, SS_FILE);
+  if (!fs.existsSync(ssPath)) {
+    return { compressed: false, reason: "file not found" };
+  }
+
+  let lines = readLines(ssPath);
+  const linesBefore = lines.length;
+
+  // Remove "Refactoring Summary" and similar historical sections
+  const sectionsToRemove = [
+    "Refactoring Summary",
+    "Before",
+    "After",
+    "Key Improvements",
+  ];
+
+  const result = [];
+  let skipSection = false;
+  let currentHeader = "";
+
+  for (const line of lines) {
+    const headerMatch = line.match(/^#{1,4}\s+(.+)/);
+    if (headerMatch) {
+      currentHeader = headerMatch[1].trim();
+      skipSection = sectionsToRemove.some(s => currentHeader.includes(s));
+    }
+    if (!skipSection) {
+      result.push(line);
+    }
+  }
+
+  // Remove "## Recent Changes" entries older than 7 days
+  const sevenDaysAgo = new Date();
+  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+
+  const finalResult = [];
+  let inRecentChanges = false;
+
+  for (const line of result) {
+    if (line.includes("## Recent Changes")) {
+      inRecentChanges = true;
+      finalResult.push(line);
+      continue;
+    }
+
+    if (inRecentChanges && line.match(/^## /)) {
+      inRecentChanges = false;
+      finalResult.push(line);
+      continue;
+    }
+
+    if (inRecentChanges) {
+      // Check if line has a date
+      const dateMatch = line.match(/(\d{4}-\d{2}-\d{2})/);
+      if (dateMatch) {
+        const lineDate = new Date(dateMatch[1]);
+        if (lineDate < sevenDaysAgo) continue; // Skip old entries
+      }
+    }
+
+    finalResult.push(line);
+  }
+
+  const linesAfter = finalResult.length;
+
+  if (linesAfter >= linesBefore) {
+    return { compressed: false, reason: "no reduction" };
+  }
+
+  backupFile(ssPath);
+  writeLines(ssPath, finalResult);
+  return { compressed: true, linesBefore, linesAfter };
+}
+
 function main() {
   const input = readHookInput();
   const projectRoot = input.cwd || process.cwd();
@@ -211,15 +288,27 @@ function main() {
 
   if (!isCompact) return;
 
-  const result = compressKnowledgeGraph(projectRoot);
+  const results = [];
 
-  if (!result.compressed) return;
+  // Compress knowledge-graph.md
+  const kgResult = compressKnowledgeGraph(projectRoot);
+  if (kgResult.compressed) {
+    results.push(`knowledge-graph.md: ${kgResult.linesBefore} → ${kgResult.linesAfter} lines`);
+  }
+
+  // Compress session-state.md
+  const ssResult = compressSessionState(projectRoot);
+  if (ssResult.compressed) {
+    results.push(`session-state.md: ${ssResult.linesBefore} → ${ssResult.linesAfter} lines`);
+  }
+
+  if (results.length === 0) return;
 
   const output = {
     suppressOutput: true,
     hookSpecificOutput: {
       hookEventName: "compact",
-      additionalContext: `Memory auto-compressed: knowledge-graph.md ${result.linesBefore} → ${result.linesAfter} lines. Backup at \`${result.backupPath}\`.`,
+      additionalContext: `Memory auto-compressed:\n${results.join("\n")}`,
     },
   };
 

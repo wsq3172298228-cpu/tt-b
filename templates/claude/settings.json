@@ -6,6 +6,26 @@
         "hooks": [
           {
             "type": "command",
+            "command": "node .claude/bin/model-preflight.js",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "node .claude/bin/startup-contract.js",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "node .claude/bin/memory-folder-check.js",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "node .claude/bin/memory-restore.js",
+            "timeout": 5
+          },
+          {
+            "type": "command",
             "command": "node .claude/bin/memory-reminder.js",
             "timeout": 5
           },
@@ -23,6 +43,60 @@
           {
             "type": "command",
             "command": "node .claude/bin/memory-reminder.js",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .claude/bin/diff-guard.js",
+            "timeout": 3
+          },
+          {
+            "type": "command",
+            "command": "node .claude/bin/memory-write-guard.js",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .claude/bin/memory-snapshot.js",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .claude/bin/cleanup.js",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .claude/bin/ttb-todo.js",
+            "timeout": 3
+          },
+          {
+            "type": "command",
+            "command": "node .claude/bin/memory-auto-save.js",
             "timeout": 5
           }
         ]

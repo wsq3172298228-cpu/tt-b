@@ -37,4 +37,17 @@ module.exports = {
   extractEdges: require("./extract-edges"),
   subgraphQuery: require("./subgraph-query"),
   createGraphStore: require("./graph-store"),
+
+  // GML workflow tools
+  workflowCheck: require("./workflow-check"),
+  evidenceValidate: require("./evidence-validate"),
+  takeoverCheck: require("./takeover-check"),
+  doneCheck: require("./done-check"),
+  delegateValidate: require("./delegate-validate"),
+  capabilityRoute: require("./capability-route"),
+  memoryRecover: require("./memory-recover"),
+  graphExpand: require("./graph-expand"),
+
+  // Code navigation tools
+  filePointer: require("./file-pointer"),
 };

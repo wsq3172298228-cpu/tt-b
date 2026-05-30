@@ -18,3 +18,5 @@ logs/
 .claude/memory/
 .claude/knowledge-graph.md
 .claude/session-state.md
+
+agent-memory/* 

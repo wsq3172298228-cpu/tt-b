@@ -1,8 +1,10 @@
 /**
  * graph-store — SQLite-backed knowledge graph storage.
  *
- * Uses better-sqlite3 with WAL mode for ACID transactions and
- * concurrent read/write performance. Supports dual-write to markdown.
+ * Optimizations:
+ * 1. Integer primary keys + path dictionary (files table)
+ * 2. Compressed metadata storage (zlib BLOB)
+ * 3. Incremental vacuum for space reclamation
  *
  * @param {object} opts
  * @param {string} opts.projectRoot — project root directory
@@ -12,6 +14,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const zlib = require("zlib");
 
 const DEFAULT_DB = ".claude/memory/graph_memory.db";
 const DEFAULT_MD = ".claude/memory/knowledge-graph.md";
@@ -23,6 +26,8 @@ function createGraphStore(opts) {
   const mdPath = path.join(root, opts.markdownPath || DEFAULT_MD);
 
   let db = null;
+  let fileIdCache = new Map(); // path -> id
+  let nodeIdCache = new Map(); // composite key -> integer id
 
   function getDb() {
     if (db) return db;
@@ -34,34 +39,69 @@ function createGraphStore(opts) {
     db = new Database(dbPath);
     db.pragma("journal_mode = WAL");
     db.pragma("foreign_keys = ON");
+    db.pragma("auto_vacuum = INCREMENTAL");
 
     initSchema();
     return db;
   }
 
   function initSchema() {
+    // Check if old schema exists (has file_path column in nodes)
+    const hasOldSchema = db.prepare(`
+      SELECT COUNT(*) as c FROM pragma_table_info('nodes') WHERE name = 'file_path'
+    `).get().c > 0;
+
+    if (hasOldSchema) {
+      migrateFromOldSchema();
+      return;
+    }
+
+    // Check if tables exist at all
+    const tablesExist = db.prepare(`
+      SELECT COUNT(*) as c FROM sqlite_master WHERE type = 'table' AND name = 'nodes'
+    `).get().c > 0;
+
+    if (!tablesExist) {
+      // Fresh install - create new schema
+      createNewSchema();
+    }
+    // else: already using new schema
+  }
+
+  function createNewSchema() {
     db.exec(`
+      -- Path dictionary: deduplicate file paths
+      CREATE TABLE IF NOT EXISTS files (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        path TEXT NOT NULL UNIQUE
+      );
+
+      -- Nodes with integer primary key
       CREATE TABLE IF NOT EXISTS nodes (
-        id TEXT PRIMARY KEY,
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
         type TEXT NOT NULL,
-        file_path TEXT,
-        metadata TEXT,
+        file_id INTEGER REFERENCES files(id) ON DELETE SET NULL,
+        metadata BLOB,
         stale_since TEXT,
         stale_reason TEXT,
         created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
+        updated_at TEXT NOT NULL,
+        -- Legacy string ID for migration compatibility
+        legacy_id TEXT UNIQUE
       );
 
+      -- Edges with integer foreign keys
       CREATE TABLE IF NOT EXISTS edges (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        from_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
-        to_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+        from_id INTEGER NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+        to_id INTEGER NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
         relation TEXT NOT NULL,
-        metadata TEXT,
+        metadata BLOB,
         UNIQUE(from_id, to_id, relation)
       );
 
+      -- Commit history
       CREATE TABLE IF NOT EXISTS commits (
         hash TEXT PRIMARY KEY,
         message TEXT,
@@ -71,24 +111,110 @@ function createGraphStore(opts) {
         removed INTEGER DEFAULT 0
       );
 
+      -- Indexes
+      CREATE INDEX IF NOT EXISTS idx_files_path ON files(path);
       CREATE INDEX IF NOT EXISTS idx_nodes_name ON nodes(name);
       CREATE INDEX IF NOT EXISTS idx_nodes_type ON nodes(type);
-      CREATE INDEX IF NOT EXISTS idx_nodes_file_path ON nodes(file_path);
+      CREATE INDEX IF NOT EXISTS idx_nodes_file_id ON nodes(file_id);
       CREATE INDEX IF NOT EXISTS idx_nodes_stale ON nodes(stale_since);
+      CREATE INDEX IF NOT EXISTS idx_nodes_legacy_id ON nodes(legacy_id);
       CREATE INDEX IF NOT EXISTS idx_edges_from ON edges(from_id);
       CREATE INDEX IF NOT EXISTS idx_edges_to ON edges(to_id);
       CREATE INDEX IF NOT EXISTS idx_edges_relation ON edges(relation);
     `);
   }
 
-  /**
-   * Generate node ID from components.
-   * Uses file_path to disambiguate same-named entities in different files.
-   */
-  function nodeId(name, type, filePath) {
-    if (filePath) return `${filePath}:${name}:${type}`;
-    return `:${name}:${type}`;
+  function migrateFromOldSchema() {
+    // Old schema detected - migrate to new schema
+    // Strategy: drop and recreate, then reimport from markdown
+    db.exec(`
+      DROP TABLE IF EXISTS edges;
+      DROP TABLE IF EXISTS nodes;
+      DROP TABLE IF EXISTS files;
+      DROP TABLE IF EXISTS commits;
+    `);
+
+    createNewSchema();
+
+    // Try reimport from markdown if available
+    if (fs.existsSync(mdPath)) {
+      const mdContent = fs.readFileSync(mdPath, "utf8");
+      const graph = fromMarkdown(mdContent);
+      saveToDb(graph);
+    }
   }
+
+  // ─── Compression helpers ────────────────────────────────────────────
+
+  function compressMeta(obj) {
+    if (!obj) return null;
+    const json = JSON.stringify(obj);
+    return zlib.deflateRawSync(Buffer.from(json, "utf8"));
+  }
+
+  function decompressMeta(blob) {
+    if (!blob) return {};
+    try {
+      const buf = Buffer.isBuffer(blob) ? blob : Buffer.from(blob);
+      const json = zlib.inflateRawSync(buf, { maxOutputLength: 1024 * 1024 }).toString("utf8");
+      return JSON.parse(json);
+    } catch {
+      // Fallback: try plain JSON (migration from old format)
+      try { return JSON.parse(blob.toString()); } catch { return {}; }
+    }
+  }
+
+  // ─── Path dictionary helpers ────────────────────────────────────────
+
+  function getOrCreateFileId(filePath) {
+    if (!filePath) return null;
+    if (fileIdCache.has(filePath)) return fileIdCache.get(filePath);
+
+    const existing = db.prepare("SELECT id FROM files WHERE path = ?").get(filePath);
+    if (existing) {
+      fileIdCache.set(filePath, existing.id);
+      return existing.id;
+    }
+
+    const info = db.prepare("INSERT INTO files (path) VALUES (?)").run(filePath);
+    fileIdCache.set(filePath, info.lastInsertRowid);
+    return info.lastInsertRowid;
+  }
+
+  function getFilePath(fileId) {
+    if (!fileId) return null;
+    const row = db.prepare("SELECT path FROM files WHERE id = ?").get(fileId);
+    return row ? row.path : null;
+  }
+
+  // ─── Node ID helpers ────────────────────────────────────────────────
+
+  function getOrCreateNodeId(name, type, filePath) {
+    const key = `${filePath || ""}:${name}:${type}`;
+    if (nodeIdCache.has(key)) return nodeIdCache.get(key);
+
+    const fileId = getOrCreateFileId(filePath);
+    const legacyId = `${filePath || ""}:${name}:${type}`;
+
+    // Try find by legacy ID first
+    const existing = db.prepare("SELECT id FROM nodes WHERE legacy_id = ?").get(legacyId);
+    if (existing) {
+      nodeIdCache.set(key, existing.id);
+      return existing.id;
+    }
+
+    // Create new node
+    const now = new Date().toISOString();
+    const info = db.prepare(`
+      INSERT INTO nodes (name, type, file_id, legacy_id, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(name, type, fileId, legacyId, now, now);
+
+    nodeIdCache.set(key, info.lastInsertRowid);
+    return info.lastInsertRowid;
+  }
+
+  // ─── Core API ───────────────────────────────────────────────────────
 
   /**
    * Load full graph as in-memory object.
@@ -110,40 +236,44 @@ function createGraphStore(opts) {
       return { nodes: {}, edges: [], commits: [], source: "empty" };
     }
 
-    // Load from SQLite
+    // Load from SQLite with JOIN for file paths
     const nodes = {};
-    for (const row of d.prepare("SELECT * FROM nodes").all()) {
-      nodes[row.id] = {
+    const rows = d.prepare(`
+      SELECT n.*, f.path as file_path
+      FROM nodes n
+      LEFT JOIN files f ON n.file_id = f.id
+    `).all();
+
+    for (const row of rows) {
+      const legacyId = row.legacy_id || `:${row.name}:${row.type}`;
+      nodes[legacyId] = {
         type: row.type,
         name: row.name,
-        metadata: row.metadata ? JSON.parse(row.metadata) : {},
+        metadata: decompressMeta(row.metadata),
         staleSince: row.stale_since || null,
         staleReason: row.stale_reason || null,
       };
-      if (row.file_path) nodes[row.id].metadata.path = row.file_path;
+      if (row.file_path) nodes[legacyId].metadata.path = row.file_path;
     }
 
-    const edges = d.prepare("SELECT * FROM edges").all().map((e) => {
-      const from = nodes[e.from_id] || parseNodeId(e.from_id);
-      const to = nodes[e.to_id] || parseNodeId(e.to_id);
-      return {
-        from: { type: from.type, name: from.name },
-        relation: e.relation,
-        to: { type: to.type, name: to.name },
-      };
-    });
+    const edges = d.prepare(`
+      SELECT e.relation,
+             fn.name as from_name, fn.type as from_type, ff.path as from_path,
+             tn.name as to_name, tn.type as to_type, tf.path as to_path
+      FROM edges e
+      JOIN nodes fn ON e.from_id = fn.id
+      JOIN nodes tn ON e.to_id = tn.id
+      LEFT JOIN files ff ON fn.file_id = ff.id
+      LEFT JOIN files tf ON tn.file_id = tf.id
+    `).all().map((e) => ({
+      from: { type: e.from_type, name: e.from_name, path: e.from_path || undefined },
+      relation: e.relation,
+      to: { type: e.to_type, name: e.to_name, path: e.to_path || undefined },
+    }));
 
     const commits = d.prepare("SELECT * FROM commits ORDER BY timestamp DESC LIMIT ?").all(MAX_COMMITS);
 
     return { nodes, edges, commits, source: "sqlite" };
-  }
-
-  function parseNodeId(id) {
-    const parts = id.split(":");
-    if (parts.length === 3) {
-      return { type: parts[2], name: parts[1] };
-    }
-    return { type: "Unknown", name: id };
   }
 
   /**
@@ -165,16 +295,12 @@ function createGraphStore(opts) {
     const d = getDb();
     const now = new Date().toISOString();
 
-    const upsertNode = d.prepare(`
-      INSERT INTO nodes (id, name, type, file_path, metadata, stale_since, stale_reason, created_at, updated_at)
+    const insertNode = d.prepare(`
+      INSERT INTO nodes (name, type, file_id, metadata, stale_since, stale_reason, legacy_id, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET
-        name=excluded.name, type=excluded.type, file_path=excluded.file_path,
-        metadata=excluded.metadata, stale_since=excluded.stale_since,
-        stale_reason=excluded.stale_reason, updated_at=excluded.updated_at
     `);
 
-    const upsertEdge = d.prepare(`
+    const insertEdge = d.prepare(`
       INSERT OR IGNORE INTO edges (from_id, to_id, relation, metadata)
       VALUES (?, ?, ?, ?)
     `);
@@ -188,22 +314,38 @@ function createGraphStore(opts) {
       // Clear existing data for full sync
       d.exec("DELETE FROM edges");
       d.exec("DELETE FROM nodes");
+      d.exec("DELETE FROM files");
+      fileIdCache.clear();
+      nodeIdCache.clear();
 
-      for (const [id, node] of Object.entries(graph.nodes || {})) {
+      for (const [legacyId, node] of Object.entries(graph.nodes || {})) {
         const meta = { ...node.metadata };
         const filePath = meta.path || null;
         delete meta.path;
-        upsertNode.run(
-          id, node.name, node.type, filePath,
-          JSON.stringify(meta), node.staleSince || null, node.staleReason || null,
-          now, now
+
+        const fileId = getOrCreateFileId(filePath);
+        insertNode.run(
+          node.name, node.type, fileId,
+          compressMeta(meta),
+          node.staleSince || null, node.staleReason || null,
+          legacyId, now, now
         );
       }
 
+      // Build legacy ID -> integer ID map
+      const idMap = new Map();
+      for (const row of d.prepare("SELECT id, legacy_id FROM nodes").all()) {
+        if (row.legacy_id) idMap.set(row.legacy_id, row.id);
+      }
+
       for (const edge of graph.edges || []) {
-        const fromId = edge.from._id || nodeId(edge.from.name, edge.from.type, edge.from.path);
-        const toId = edge.to._id || nodeId(edge.to.name, edge.to.type, edge.to.path);
-        upsertEdge.run(fromId, toId, edge.relation, null);
+        const fromLegacy = edge.from._id || `${edge.from.path || ""}:${edge.from.name}:${edge.from.type}`;
+        const toLegacy = edge.to._id || `${edge.to.path || ""}:${edge.to.name}:${edge.to.type}`;
+        const fromId = idMap.get(fromLegacy);
+        const toId = idMap.get(toLegacy);
+        if (fromId && toId) {
+          insertEdge.run(fromId, toId, edge.relation, null);
+        }
       }
 
       for (const commit of graph.commits || []) {
@@ -218,7 +360,7 @@ function createGraphStore(opts) {
   }
 
   /**
-   * Apply a patch directly to SQLite (preferred over in-memory patching).
+   * Apply a patch directly to SQLite.
    * Returns { changed, added, modified, removed }
    */
   function applyPatch(graph, patch) {
@@ -233,13 +375,13 @@ function createGraphStore(opts) {
     let removedCount = 0;
 
     const upsertNode = d.prepare(`
-      INSERT INTO nodes (id, name, type, file_path, metadata, stale_since, stale_reason, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET
+      INSERT INTO nodes (name, type, file_id, metadata, legacy_id, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(legacy_id) DO UPDATE SET
         metadata=excluded.metadata, updated_at=excluded.updated_at
     `);
 
-    const deleteNode = d.prepare("DELETE FROM nodes WHERE id = ?");
+    const deleteNode = d.prepare("DELETE FROM nodes WHERE legacy_id = ?");
     const insertEdge = d.prepare(`
       INSERT OR IGNORE INTO edges (from_id, to_id, relation, metadata) VALUES (?, ?, ?, ?)
     `);
@@ -250,30 +392,32 @@ function createGraphStore(opts) {
 
     const apply = d.transaction(() => {
       for (const node of patch.added) {
-        const id = nodeId(node.name, node.type, node.path);
+        const legacyId = `${node.path || ""}:${node.name}:${node.type}`;
+        const fileId = getOrCreateFileId(node.path);
         const meta = { category: node.category || null, addedIn: patch.commitHash ? patch.commitHash.slice(0, 8) : null };
-        upsertNode.run(id, node.name, node.type, node.path || null, JSON.stringify(meta), null, null, now, now);
+        upsertNode.run(node.name, node.type, fileId, compressMeta(meta), legacyId, now, now);
         addedCount++;
       }
 
       for (const node of patch.modified) {
-        const id = nodeId(node.name, node.type, node.path);
-        const existing = d.prepare("SELECT metadata FROM nodes WHERE id = ?").get(id);
-        const meta = existing ? JSON.parse(existing.metadata || "{}") : {};
+        const legacyId = `${node.path || ""}:${node.name}:${node.type}`;
+        const existing = db.prepare("SELECT metadata FROM nodes WHERE legacy_id = ?").get(legacyId);
+        const meta = existing ? decompressMeta(existing.metadata) : {};
         meta.modifiedIn = patch.commitHash ? patch.commitHash.slice(0, 8) : null;
+        const fileId = getOrCreateFileId(node.path);
         if (!existing) {
           meta.category = node.category || null;
-          upsertNode.run(id, node.name, node.type, node.path || null, JSON.stringify(meta), null, null, now, now);
+          upsertNode.run(node.name, node.type, fileId, compressMeta(meta), legacyId, now, now);
           addedCount++;
         } else {
-          upsertNode.run(id, node.name, node.type, node.path || null, JSON.stringify(meta), null, null, now, now);
+          upsertNode.run(node.name, node.type, fileId, compressMeta(meta), legacyId, now, now);
           modifiedCount++;
         }
       }
 
       for (const node of patch.removed) {
-        const id = nodeId(node.name, node.type, node.path);
-        const info = deleteNode.run(id);
+        const legacyId = `${node.path || ""}:${node.name}:${node.type}`;
+        const info = deleteNode.run(legacyId);
         if (info.changes > 0) removedCount++;
       }
 
@@ -305,9 +449,6 @@ function createGraphStore(opts) {
 
   /**
    * GC: mark stale nodes and remove long-stale ones.
-   * @param {object} patch — { deletedFiles: [], removed: [] }
-   * @param {number} staleThreshold — commits before removal (default 3)
-   * @returns {{ marked: string[], removed: string[] }}
    */
   function gc(patch, staleThreshold) {
     const d = getDb();
@@ -317,17 +458,24 @@ function createGraphStore(opts) {
     const removed = [];
 
     const markStale = d.prepare(`
-      UPDATE nodes SET stale_since = ?, stale_reason = ? WHERE id = ? AND stale_since IS NULL
+      UPDATE nodes SET stale_since = ?, stale_reason = ? WHERE legacy_id = ? AND stale_since IS NULL
     `);
 
     const gcTransaction = d.transaction(() => {
       // Mark nodes from deleted files
       if (patch && patch.deletedFiles) {
         for (const filePath of patch.deletedFiles) {
-          const rows = d.prepare("SELECT id, name FROM nodes WHERE file_path = ?").all(filePath);
+          const rows = d.prepare(`
+            SELECT n.id, n.name, n.legacy_id
+            FROM nodes n
+            JOIN files f ON n.file_id = f.id
+            WHERE f.path = ?
+          `).all(filePath);
           for (const row of rows) {
-            markStale.run(now, `file deleted: ${filePath}`, row.id);
-            marked.push(row.id);
+            if (row.legacy_id) {
+              markStale.run(now, `file deleted: ${filePath}`, row.legacy_id);
+              marked.push(row.legacy_id);
+            }
           }
         }
       }
@@ -335,36 +483,44 @@ function createGraphStore(opts) {
       // Mark explicitly removed nodes
       if (patch && patch.removed) {
         for (const node of patch.removed) {
-          const id = nodeId(node.name, node.type, node.path);
-          const info = markStale.run(now, "removed in patch", id);
-          if (info.changes > 0) marked.push(id);
+          const legacyId = `${node.path || ""}:${node.name}:${node.type}`;
+          const info = markStale.run(now, "removed in patch", legacyId);
+          if (info.changes > 0) marked.push(legacyId);
         }
       }
 
       // Scan for files that no longer exist on disk
-      const allFileNodes = d.prepare("SELECT id, file_path FROM nodes WHERE file_path IS NOT NULL AND stale_since IS NULL").all();
-      for (const row of allFileNodes) {
-        const fullPath = path.join(root, row.file_path);
+      const allFiles = d.prepare("SELECT id, path FROM files").all();
+      for (const file of allFiles) {
+        const fullPath = path.join(root, file.path);
         if (!fs.existsSync(fullPath)) {
-          markStale.run(now, `file not found: ${row.file_path}`, row.id);
-          marked.push(row.id);
+          const rows = d.prepare("SELECT legacy_id FROM nodes WHERE file_id = ? AND stale_since IS NULL").all(file.id);
+          for (const row of rows) {
+            if (row.legacy_id) {
+              markStale.run(now, `file not found: ${file.path}`, row.legacy_id);
+              marked.push(row.legacy_id);
+            }
+          }
         }
       }
 
       // Remove nodes stale for >= threshold commits
-      const commitCount = d.prepare("SELECT COUNT(*) as c FROM commits").get().c;
-      const staleNodes = d.prepare("SELECT id, stale_since FROM nodes WHERE stale_since IS NOT NULL").all();
+      const staleNodes = d.prepare("SELECT legacy_id, stale_since FROM nodes WHERE stale_since IS NOT NULL").all();
       for (const row of staleNodes) {
         const staleIdx = d.prepare("SELECT COUNT(*) as c FROM commits WHERE timestamp >= ?").get(row.stale_since).c;
         const commitsSinceStale = staleIdx > 0 ? staleIdx : threshold;
         if (commitsSinceStale >= threshold) {
-          d.prepare("DELETE FROM nodes WHERE id = ?").run(row.id);
-          removed.push(row.id);
+          d.prepare("DELETE FROM nodes WHERE legacy_id = ?").run(row.legacy_id);
+          removed.push(row.legacy_id);
         }
       }
     });
 
     gcTransaction();
+
+    // Incremental vacuum to reclaim space
+    d.prepare("PRAGMA incremental_vacuum(100)").run();
+
     return { marked, removed };
   }
 
@@ -373,16 +529,19 @@ function createGraphStore(opts) {
    */
   function verify() {
     const d = getDb();
-    const missingFiles = d.prepare(
-      "SELECT id, name, file_path FROM nodes WHERE file_path IS NOT NULL"
-    ).all().filter((row) => !fs.existsSync(path.join(root, row.file_path)));
+
+    const missingFiles = d.prepare(`
+      SELECT n.id, n.name, f.path as file_path
+      FROM nodes n
+      JOIN files f ON n.file_id = f.id
+    `).all().filter((row) => !fs.existsSync(path.join(root, row.file_path)));
 
     const danglingEdges = d.prepare(`
-      SELECT e.relation, f.name as from_name, f.type as from_type, t.name as to_name, t.type as to_type
+      SELECT e.relation, fn.name as from_name, fn.type as from_type, tn.name as to_name, tn.type as to_type
       FROM edges e
-      LEFT JOIN nodes f ON e.from_id = f.id
-      LEFT JOIN nodes t ON e.to_id = t.id
-      WHERE f.id IS NULL OR t.id IS NULL
+      LEFT JOIN nodes fn ON e.from_id = fn.id
+      LEFT JOIN nodes tn ON e.to_id = tn.id
+      WHERE fn.id IS NULL OR tn.id IS NULL
     `).all();
 
     return { missingFiles, danglingEdges };
@@ -400,14 +559,14 @@ function createGraphStore(opts) {
 
     const nodes = {};
     for (const n of rawNodes) {
-      const id = nodeId(n.name, n.type, null);
-      nodes[id] = { type: n.type, name: n.name, metadata: {} };
+      const legacyId = `:${n.name}:${n.type}`;
+      nodes[legacyId] = { type: n.type, name: n.name, metadata: {} };
     }
 
     const edges = rawEdges.map((e) => {
-      const fromId = nodeId(e.from.name, e.from.type, null);
-      const toId = nodeId(e.to.name, e.to.type, null);
-      // Ensure referenced nodes exist (extract-nodes regex may miss dotted names)
+      const fromId = `:${e.from.name}:${e.from.type}`;
+      const toId = `:${e.to.name}:${e.to.type}`;
+      // Ensure referenced nodes exist
       if (!nodes[fromId]) nodes[fromId] = { type: e.from.type, name: e.from.name, metadata: {} };
       if (!nodes[toId]) nodes[toId] = { type: e.to.type, name: e.to.name, metadata: {} };
       return {
@@ -483,11 +642,16 @@ function createGraphStore(opts) {
 
   function stats() {
     const d = getDb();
+    const dbSize = fs.existsSync(dbPath) ? fs.statSync(dbPath).size : 0;
+    const mdSize = fs.existsSync(mdPath) ? fs.statSync(mdPath).size : 0;
     return {
       nodeCount: d.prepare("SELECT COUNT(*) as c FROM nodes").get().c,
       edgeCount: d.prepare("SELECT COUNT(*) as c FROM edges").get().c,
+      fileCount: d.prepare("SELECT COUNT(*) as c FROM files").get().c,
       commitCount: d.prepare("SELECT COUNT(*) as c FROM commits").get().c,
       staleCount: d.prepare("SELECT COUNT(*) as c FROM nodes WHERE stale_since IS NOT NULL").get().c,
+      dbSizeBytes: dbSize,
+      mdSizeBytes: mdSize,
       source: "sqlite",
     };
   }
@@ -496,6 +660,8 @@ function createGraphStore(opts) {
     if (db) {
       db.close();
       db = null;
+      fileIdCache.clear();
+      nodeIdCache.clear();
     }
   }
 

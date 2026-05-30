@@ -1,6 +1,6 @@
 # tt-b 快速开始
 
-模型感知的智能体工作流工具包。一条命令，为你的项目加上记忆系统、8 个钩子、12 个 MCP 工具和 15 个技能。
+模型感知的智能体工作流工具包。一条命令，为你的项目加上记忆系统、12 个钩子、10 个 MCP 工具和 15 个技能。
 
 > 完整架构和 API 参考请查阅 [README-zh-CN.md](README-zh-CN.md)。
 
@@ -19,7 +19,7 @@
 # 1. 注册插件市场
 /plugin marketplace add wsq3172298228-cpu/tt-b
 
-# 2. 安装插件（自动注册 8 hooks + MCP + 15 skills）
+# 2. 安装插件（自动注册 12 hooks + MCP + 15 skills）
 /plugin install tt-b
 ```
 
